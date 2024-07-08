@@ -1,35 +1,16 @@
-# Prerequisites
-*.d
+# Visual Studio files
+.vs/
 
-# Compiled Object files
-*.slo
-*.lo
-*.o
-*.obj
-
-# Precompiled Headers
-*.gch
-*.pch
-
-# Compiled Dynamic libraries
-*.so
-*.dylib
-*.dll
-
-# Fortran module files
-*.mod
-*.smod
-
-# Compiled Static libraries
-*.lai
-*.la
-*.a
+# Build output
+x64/
+release/
+FPRecorder/FPRecorder
 *.lib
-
-# Executables
+*.dll
 *.exe
-*.out
-*.app
-.vs
-*.wav
-*.zip
+*.log
+*.swp
+*.pdb
+
+# Audio files
+sounds/

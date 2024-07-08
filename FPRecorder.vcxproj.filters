@@ -1,0 +1,21 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <ClCompile Include="core.cpp" />
+    <ClCompile Include="main.cpp" />
+    <ClCompile Include="stb_vorbis.c" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="Error.wav.h" />
+    <ClInclude Include="miniaudio.h" />
+    <ClInclude Include="Openmanager.wav.h" />
+    <ClInclude Include="Pause.wav.h" />
+    <ClInclude Include="Restart.wav.h" />
+    <ClInclude Include="Start.wav.h" />
+    <ClInclude Include="stb_vorbis.h" />
+    <ClInclude Include="Stop.wav.h" />
+    <ClInclude Include="Unpause.wav.h" />
+    <ClInclude Include="user_config.h" />
+    <ClInclude Include="core.h" />
+  </ItemGroup>
+</Project>
