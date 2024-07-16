@@ -1,6 +1,6 @@
 #define _CRT_SECURE_NO_WARNINGS
-#include "core.h"
 #include "Error.wav.h"
+#include "gui.h"
 #include "Openmanager.wav.h"
 #include "Pause.wav.h"
 #include "Restart.wav.h"
@@ -18,6 +18,7 @@
 #include<sstream>
 #include<thread>
 #include <vector>
+using namespace gui;
 ma_uint32 sample_rate = 44100;
 ma_uint32 channels = 2;
 ma_uint32 buffer_size = 1024;

@@ -128,13 +128,13 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
-    <ClCompile Include="core.cpp" />
+    <ClCompile Include="gui.cpp" />
     <ClCompile Include="main.cpp" />
     <ClCompile Include="stb_vorbis.c" />
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="core.h" />
     <ClInclude Include="Error.wav.h" />
+    <ClInclude Include="gui.h" />
     <ClInclude Include="miniaudio.h" />
     <ClInclude Include="Openmanager.wav.h" />
     <ClInclude Include="Pause.wav.h" />
