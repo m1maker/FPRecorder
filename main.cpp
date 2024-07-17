@@ -8,7 +8,10 @@
 #include "Stop.wav.h"
 #include "Unpause.wav.h"
 #include "user_config.h"
+#include <codecvt>
 #include<filesystem>
+#include <locale>
+#include <tlhelp32.h>
 #define MINIAUDIO_IMPLEMENTATION
 #include "miniaudio.h"
 #include <chrono>
@@ -139,6 +142,29 @@ std::string get_now() {
 using namespace std;
 bool g_Recording = false;
 bool g_RecordingPaused = false;
+struct application {
+	std::wstring name;
+	ma_uint32 id;
+};
+application g_LoopbackApplication{ 0, 0 };
+std::vector<application> get_tasklist() {
+	std::vector<application> tasklist;
+	HANDLE hSnapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+	if (hSnapshot != INVALID_HANDLE_VALUE) {
+		PROCESSENTRY32W pe32;
+		pe32.dwSize = sizeof(PROCESSENTRY32W);
+		if (Process32FirstW(hSnapshot, &pe32)) {
+			do {
+				application app;
+				app.name = pe32.szExeFile;
+				app.id = pe32.th32ProcessID;
+				tasklist.push_back(app);
+			} while (Process32NextW(hSnapshot, &pe32));
+		}
+		CloseHandle(hSnapshot);
+	}
+	return tasklist;
+}
 struct audio_device {
 	std::wstring name;
 	ma_device_id id;
