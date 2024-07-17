@@ -1,3 +1,4 @@
+#define _SILENCE_ALL_CXX17_DEPRECATION_WARNINGS
 #define _CRT_SECURE_NO_WARNINGS
 #include "Error.wav.h"
 #include "gui.h"
@@ -8,6 +9,7 @@
 #include "Stop.wav.h"
 #include "Unpause.wav.h"
 #include "user_config.h"
+#include<assert.h>
 #include <codecvt>
 #include<filesystem>
 #include <locale>
@@ -22,6 +24,21 @@
 #include<thread>
 #include <vector>
 using namespace gui;
+bool unicode_convert(const std::string& str, std::wstring& output) {
+	std::wstring_convert<std::codecvt_utf8_utf16<wchar_t>> converter;
+	try {
+		output = converter.from_bytes(str);
+	}
+	catch (const std::exception& e) { return false; }
+}
+bool unicode_convert(const std::wstring& str, std::string& output) {
+	std::wstring_convert<std::codecvt_utf8_utf16<wchar_t>> converter;
+	try {
+		output = converter.to_bytes(str);
+	}
+	catch (const std::exception& e) { return false; }
+}
+
 ma_uint32 sample_rate = 44100;
 ma_uint32 channels = 2;
 ma_uint32 buffer_size = 1024;
@@ -52,15 +69,14 @@ bool run(const std::string& filename, const std::string& cmdline, bool wait_for_
 		c_cmdline[tmp.size()] = 0;
 	}
 	std::wstring filename_u, cmdline_u;
-	filename_u = std::wstring(filename.begin(), filename.end());
-	cmdline_u = std::wstring(cmdline.begin(), cmdline.end());
+	unicode_convert(filename, filename_u);
+	unicode_convert(cmdline, cmdline_u);
 	BOOL r = CreateProcess(filename_u.c_str(), &cmdline_u[0], NULL, NULL, FALSE, INHERIT_CALLER_PRIORITY, NULL, NULL, &si, &info);
 	if (r == FALSE)
 		return false;
 	if (wait_for_completion) {
 		while (WaitForSingleObject(info.hProcess, 0) == WAIT_TIMEOUT) {
 			wait(5);
-			update_window(GetForegroundWindow());
 		}
 	}
 	CloseHandle(info.hProcess);
@@ -110,7 +126,9 @@ bool play(std::wstring filename) {
 }
 ma_decoder g_Decoder;
 bool play(std::string filename) {
-	return play(std::wstring(filename.begin(), filename.end()));
+	std::wstring filename_u;
+	unicode_convert(filename, filename_u);
+	return play(filename_u);
 }
 bool play_from_memory(const unsigned char data[], size_t data_size = 0) {
 	if (&g_Decoder != nullptr)ma_decoder_uninit(&g_Decoder);
@@ -146,7 +164,7 @@ struct application {
 	std::wstring name;
 	ma_uint32 id;
 };
-application g_LoopbackApplication{ 0, 0 };
+application g_LoopbackApplication;
 std::vector<application> get_tasklist() {
 	std::vector<application> tasklist;
 	HANDLE hSnapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
@@ -205,7 +223,9 @@ public:
 	ma_device loopback_device;
 	std::string filename;
 	void start() {
-		CreateDirectory(std::wstring(record_path.begin(), record_path.end()).c_str(), nullptr);
+		std::wstring record_path_u;
+		unicode_convert(record_path, record_path_u);
+		CreateDirectory(record_path_u.c_str(), nullptr);
 		std::string file = record_path + "/" + get_now() + ".wav";
 		filename = file;
 		encoderConfig = ma_encoder_config_init(ma_encoding_format_wav, buffer_format, channels, sample_rate);
@@ -274,10 +294,11 @@ std::vector<audio_device> get_input_audio_devices()
 	for (iCaptureDevice = 0; iCaptureDevice < captureDeviceCount; ++iCaptureDevice) {
 		const char* name = pCaptureDeviceInfos[iCaptureDevice].name;
 		std::string name_str(name);
-		std::wstring final(name_str.begin(), name_str.end());
+		std::wstring name_str_u;
+		unicode_convert(name_str, name_str_u);
 		audio_device ad;
 		ad.id = pCaptureDeviceInfos[iCaptureDevice].id;
-		ad.name = final;
+		ad.name = name_str_u;
 		audioDevices.push_back(ad);
 	}
 	ma_context_uninit(&context);
@@ -304,10 +325,11 @@ std::vector<audio_device> get_output_audio_devices()
 	for (iPlaybackDevice = 0; iPlaybackDevice < playbackDeviceCount; ++iPlaybackDevice) {
 		const char* name = pPlaybackDeviceInfos[iPlaybackDevice].name;
 		std::string name_str(name);
-		std::wstring final(name_str.begin(), name_str.end());
+		std::wstring name_str_u;
+		unicode_convert(name_str, name_str_u);
 		audio_device ad;
 		ad.id = pPlaybackDeviceInfos[iPlaybackDevice].id;
-		ad.name = final;
+		ad.name = name_str_u;
 		audioDevices.push_back(ad);
 	}
 
@@ -417,7 +439,7 @@ int CALLBACK WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR     lpC
 		exit(-1);
 	}
 	int result = conf.load();
-	if (result == 0) {
+	if (result == EXIT_SUCCESS) {
 		std::string srate = conf.read("sample-rate");
 		sample_rate = std::stoi(srate);
 		std::string chann = conf.read("channels");
@@ -434,7 +456,7 @@ int CALLBACK WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR     lpC
 		std::string sevents = conf.read("sound-events");
 		sound_events = std::stoi(sevents);
 	}
-	else if (result < 0) {
+	else if (result < MA_SUCCESS) {
 		conf.write("sample-rate", std::to_string(sample_rate));
 		conf.write("channels", std::to_string(channels));
 		conf.write("buffer-size", std::to_string(buffer_size));
@@ -475,7 +497,9 @@ int CALLBACK WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR     lpC
 				g_RecordingsManager = false;
 			}
 			if ((key_down(VK_SPACE) && get_current_focus() == items_view_list) || is_pressed(play_button)) {
-				play(std::wstring(record_path.begin(), record_path.end()) + L"/" + get_focused_list_item_name(items_view_list));
+				std::wstring record_path_u;
+				unicode_convert(record_path, record_path_u);
+				play(record_path_u + L"/" + get_focused_list_item_name(items_view_list));
 				if (get_current_focus() == play_button)focus(pause_button);
 			}
 			if (is_pressed(pause_button) and g_SoundActive) {
@@ -494,7 +518,9 @@ int CALLBACK WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR     lpC
 				if (result == IDNO)continue;
 				else if (result == IDYES)
 				{
-					std::wstring file = std::wstring(record_path.begin(), record_path.end()) + L"/" + get_focused_list_item_name(items_view_list);
+					std::wstring record_path_u;
+					unicode_convert(record_path, record_path_u);
+					std::wstring file = record_path_u + L"/" + get_focused_list_item_name(items_view_list);
 					if (g_SoundActive) {
 						ma_sound_uninit(&player);
 						g_SoundActive = false;
