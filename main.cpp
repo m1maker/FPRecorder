@@ -11,8 +11,10 @@
 #include "user_config.h"
 #include<assert.h>
 #include <codecvt>
+#include<condition_variable>
 #include<filesystem>
 #include <locale>
+#include<mutex>
 #include <tlhelp32.h>
 #define MINIAUDIO_IMPLEMENTATION
 #include "miniaudio.h"
@@ -197,18 +199,26 @@ float* mix(float* input1, float* input2, ma_uint32 frameCount) {
 	return result;
 }
 float* loopback_buffer = nullptr;
+condition_variable loopback_request;
+mutex loopback_lock;
+ma_bool8 g_LoopbackProcess = MA_TRUE;
 void audio_recorder_callback(ma_device* pDevice, void* pOutput, const void* pInput, ma_uint32 frameCount)
 {
 	ma_encoder* encoder = (ma_encoder*)pDevice->pUserData;
 	if (g_CurrentOutputDevice.name == L"NO")
 		ma_encoder_write_pcm_frames(encoder, pInput, frameCount, nullptr);
 	else {
+		loopback_request.notify_one();
+		if (loopback_buffer == nullptr)return;
 		float* result = mix((float*)pInput, loopback_buffer, frameCount);
 		ma_encoder_write_pcm_frames(encoder, result, frameCount, nullptr);
 	}
 	(void)pOutput;
 }
+unique_lock<mutex> loopback_mtx(loopback_lock);
 void audio_recorder_callback_loopback(ma_device* pDevice, void* pOutput, const void* pInput, ma_uint32 frameCount) {
+	if (!g_LoopbackProcess)return;
+	loopback_request.wait(loopback_mtx);
 	loopback_buffer = (float*)pInput;
 	(void)pOutput;
 	(void)frameCount;
@@ -251,27 +261,39 @@ public:
 			loopbackDeviceConfig.periods = periods;
 			loopbackDeviceConfig.dataCallback = audio_recorder_callback_loopback;
 			loopbackDeviceConfig.pUserData = nullptr;
-			ma_device_init(NULL, &loopbackDeviceConfig, &loopback_device);
+			ma_backend backends[] = {
+				ma_backend_wasapi
+			};
+
+
+			ma_device_init_ex(backends, sizeof(backends) / sizeof(backends[0]), NULL, &loopbackDeviceConfig, &loopback_device);
 		}
+		g_LoopbackProcess = MA_TRUE;
 		this->resume();
 	}
 	void stop() {
 		ma_device_uninit(&recording_device);
-		if (g_CurrentOutputDevice.name != L"NO")
+		if (g_CurrentOutputDevice.name != L"NO") {
+			g_LoopbackProcess = MA_FALSE;
+			loopback_request.notify_one();
 			ma_device_uninit(&loopback_device);
-
+		}
 		ma_encoder_uninit(&encoder);
 	}
 	void pause() {
 		ma_device_stop(&recording_device);
-		if (g_CurrentOutputDevice.name != L"NO")
+		if (g_CurrentOutputDevice.name != L"NO") {
+			g_LoopbackProcess = MA_FALSE;
+			loopback_request.notify_all();
 			ma_device_stop(&loopback_device);
-
+		}
 	}
 	void resume() {
 		ma_device_start(&recording_device);
-		if (g_CurrentOutputDevice.name != L"NO")
+		if (g_CurrentOutputDevice.name != L"NO") {
+			g_LoopbackProcess = MA_TRUE;
 			ma_device_start(&loopback_device);
+		}
 	}
 };
 std::vector<audio_device> get_input_audio_devices()
