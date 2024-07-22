@@ -12,6 +12,7 @@
 #include<assert.h>
 #include <codecvt>
 #include<condition_variable>
+#include <deque>
 #include<filesystem>
 #include <locale>
 #include<mutex>
@@ -32,6 +33,7 @@ bool unicode_convert(const std::string& str, std::wstring& output) {
 		output = converter.from_bytes(str);
 	}
 	catch (const std::exception& e) { return false; }
+	return true;
 }
 bool unicode_convert(const std::wstring& str, std::string& output) {
 	std::wstring_convert<std::codecvt_utf8_utf16<wchar_t>> converter;
@@ -39,6 +41,7 @@ bool unicode_convert(const std::wstring& str, std::string& output) {
 		output = converter.to_bytes(str);
 	}
 	catch (const std::exception& e) { return false; }
+	return true;
 }
 
 ma_uint32 sample_rate = 44100;
@@ -85,7 +88,7 @@ bool run(const std::string& filename, const std::string& cmdline, bool wait_for_
 	CloseHandle(info.hThread);
 	return true;
 }
-std::vector<std::wstring> get_files(std::wstring path) {
+std::vector<std::wstring> get_files(const std::wstring& path) {
 	std::vector<std::wstring> files;
 
 	try {
@@ -191,18 +194,20 @@ struct audio_device {
 };
 audio_device g_CurrentInputDevice;
 audio_device g_CurrentOutputDevice;
-float* mix(float* input1, float* input2, ma_uint32 frameCount) {
-	float* result = new float[frameCount * 2];
-	for (ma_uint32 i = 0; i < frameCount * 2; i++) {
+auto MA_API mix(float* input1, float* input2, ma_uint32 frameCountFirst, ma_uint32 frameCountLast)->float* {
+	float* result = new float[frameCountFirst + frameCountLast];
+	for (ma_uint32 i = 0; i < frameCountFirst + frameCountLast; i++) {
 		result[i] = (input1[i] + input2[i]);
 	}
 	return result;
 }
 float* loopback_buffer = nullptr;
+ma_uint32 loopback_frames;
 condition_variable loopback_request;
 mutex loopback_lock;
 ma_bool8 g_LoopbackProcess = MA_TRUE;
-void audio_recorder_callback(ma_device* pDevice, void* pOutput, const void* pInput, ma_uint32 frameCount)
+ma_bool8 g_LoopbackReadyToMix = MA_FALSE;
+void MA_API audio_recorder_callback(ma_device* pDevice, void* pOutput, const void* pInput, ma_uint32 frameCount)
 {
 	ma_encoder* encoder = (ma_encoder*)pDevice->pUserData;
 	if (g_CurrentOutputDevice.name == L"NO")
@@ -210,19 +215,24 @@ void audio_recorder_callback(ma_device* pDevice, void* pOutput, const void* pInp
 	else {
 		loopback_request.notify_one();
 		if (loopback_buffer == nullptr)return;
-		float* result = mix((float*)pInput, loopback_buffer, frameCount);
+		while (g_LoopbackReadyToMix == MA_FALSE) {}
+		float* result = mix((float*)pInput, loopback_buffer, frameCount, loopback_frames);
 		ma_encoder_write_pcm_frames(encoder, result, frameCount, nullptr);
+		g_LoopbackReadyToMix = MA_FALSE;
 	}
 	(void)pOutput;
 }
 unique_lock<mutex> loopback_mtx(loopback_lock);
-void audio_recorder_callback_loopback(ma_device* pDevice, void* pOutput, const void* pInput, ma_uint32 frameCount) {
+void MA_API audio_recorder_callback_loopback(ma_device* pDevice, void* pOutput, const void* pInput, ma_uint32 frameCount) {
 	if (!g_LoopbackProcess)return;
 	loopback_request.wait(loopback_mtx);
 	loopback_buffer = (float*)pInput;
+	loopback_frames = frameCount;
+	g_LoopbackReadyToMix = MA_TRUE;
 	(void)pOutput;
-	(void)frameCount;
 }
+
+
 class audio_recorder {
 public:
 	ma_device_config deviceConfig;
@@ -454,11 +464,11 @@ void record_items_construct() {
 	focus(record_stop);
 }
 bool g_RecordingsManager = false;
-int CALLBACK WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR     lpCmdLine, int       nShowCmd) {
+ma_int32 MA_API CALLBACK WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR     lpCmdLine, ma_int32       nShowCmd) {
 	if (strlen(lpCmdLine) != 0) {
 		play_from_memory(Error_wav, 15499);
 		ma_sleep(1000);
-		exit(-1);
+		return MA_ERROR;
 	}
 	int result = conf.load();
 	if (result == EXIT_SUCCESS) {
@@ -478,7 +488,7 @@ int CALLBACK WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR     lpC
 		std::string sevents = conf.read("sound-events");
 		sound_events = std::stoi(sevents);
 	}
-	else if (result < MA_SUCCESS) {
+	else if (result < 0) {
 		conf.write("sample-rate", std::to_string(sample_rate));
 		conf.write("channels", std::to_string(channels));
 		conf.write("buffer-size", std::to_string(buffer_size));
@@ -619,5 +629,5 @@ int CALLBACK WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR     lpC
 			set_text(record_pause, L"&Pause recording");
 		}
 	}
-	return 0;
+	return MA_SUCCESS;
 }
