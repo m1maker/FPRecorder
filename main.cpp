@@ -575,23 +575,38 @@ ma_int32 WINAPI _stdcall MINIAUDIO_IMPLEMENTATION WinMain(HINSTANCE hInstance, H
 	}
 	int result = conf.load();
 	if (result == EXIT_SUCCESS) {
-		std::string srate = conf.read("sample-rate");
-		sample_rate = std::stoi(srate);
-		std::string chann = conf.read("channels");
-		channels = std::stoi(chann);
-		std::string bs = conf.read("buffer-size");
-		buffer_size = std::stoi(bs);
-		filename_signature = conf.read("filename-signature");
-		record_path = conf.read("record-path");
-		audio_format = conf.read("audio-format");
-		std::string ind = conf.read("input-device");
-		input_device = std::stoi(ind);
-		std::string oud = conf.read("loopback-device");
-		loopback_device = std::stoi(oud);
-		std::string sevents = conf.read("sound-events");
-		sound_events = std::stoi(sevents);
+		try {
+			std::string srate = conf.read("sample-rate");
+			sample_rate = std::stoi(srate);
+			std::string chann = conf.read("channels");
+			channels = std::stoi(chann);
+			std::string bs = conf.read("buffer-size");
+			buffer_size = std::stoi(bs);
+			filename_signature = conf.read("filename-signature");
+			record_path = conf.read("record-path");
+			audio_format = conf.read("audio-format");
+			std::string ind = conf.read("input-device");
+			input_device = std::stoi(ind);
+			std::string oud = conf.read("loopback-device");
+			loopback_device = std::stoi(oud);
+			std::string sevents = conf.read("sound-events");
+			sound_events = std::stoi(sevents);
+		}
+		catch (const std::exception& e) {
+			std::string what = e.what();
+			std::wstring what_u;
+			unicode_convert(what, what_u);
+			std::wstring last_value_u;
+			std::wstring last_name_u;
+			unicode_convert(conf.last_name, last_name_u);
+			unicode_convert(conf.last_value, last_value_u);
+			if (last_name_u.empty())last_name_u = L"None";
+			if (last_value_u.empty())last_value_u = L"Null";
+			alert(L"FPConfigParsingError", L"An error occurred while loading the existing config file. Error details:\n\"" + what_u + L"\"\nParameter: \"" + last_name_u + L"\".\nValue: \"" + last_value_u + L"\".", MB_ICONERROR);
+			exit(-2);
+		}
 	}
-	else if (result > MA_ERROR) {
+	else if (result == -1) {
 		conf.write("sample-rate", std::to_string(sample_rate));
 		conf.write("channels", std::to_string(channels));
 		conf.write("buffer-size", std::to_string(buffer_size));

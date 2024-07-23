@@ -6,6 +6,8 @@
 
 class user_config {
 public:
+	std::string last_value;
+	std::string last_name;
 	user_config(const std::string& filename) : filename(filename), data() {}
 
 	int load() {
@@ -40,6 +42,8 @@ public:
 	std::string read(const std::string& key) {
 		auto it = data.find(key);
 		if (it != data.end()) {
+			last_value = it->second;
+			last_name = it->first;
 			return it->second;
 		}
 		return "";
