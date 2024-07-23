@@ -346,7 +346,14 @@ public:
 		std::string file = record_path + "/" + get_now() + ".wav";
 		filename = file;
 		encoderConfig = ma_encoder_config_init(ma_encoding_format_wav, buffer_format, channels, sample_rate);
-		ma_encoder_init_file(file.c_str(), &encoderConfig, &encoder);
+		ma_result result = ma_encoder_init_file(file.c_str(), &encoderConfig, &encoder);
+		if (result != MA_SUCCESS) {
+			std::wstring file_u;
+			unicode_convert(file, file_u);
+			if (sound_events == MA_TRUE)		play_from_memory(Error_wav, 15499);
+			alert(L"FPEncoderInitializerError", L"Error initializing audio encoder for file \"" + file_u + L"\" with retcode " + std::to_wstring(result) + L".", MB_ICONERROR);
+			exit(result);
+		}
 		deviceConfig = ma_device_config_init(ma_device_type_capture);
 		if (g_CurrentInputDevice.name != L"NO")
 			deviceConfig.capture.pDeviceID = &g_CurrentInputDevice.id;
@@ -357,7 +364,12 @@ public:
 		deviceConfig.periods = periods;
 		deviceConfig.dataCallback = audio_recorder_callback;
 		deviceConfig.pUserData = &encoder;
-		ma_device_init(NULL, &deviceConfig, &recording_device);
+		result = ma_device_init(NULL, &deviceConfig, &recording_device);
+		if (result != MA_SUCCESS) {
+			if (sound_events == MA_TRUE)		play_from_memory(Error_wav, 15499);
+			alert(L"FPAudioDeviceInitializerError", L"Error initializing audio device for \"" + g_CurrentInputDevice.name + L"\" with retcode " + std::to_wstring(result) + L".", MB_ICONERROR);
+			exit(result);
+		}
 		if (g_CurrentOutputDevice.name != L"NO") {
 			loopbackDeviceConfig = ma_device_config_init(ma_device_type_loopback);
 			loopbackDeviceConfig.capture.pDeviceID = &g_CurrentOutputDevice.id;
@@ -373,7 +385,13 @@ public:
 			};
 
 
-			ma_device_init_ex(backends, sizeof(backends) / sizeof(backends[0]), NULL, &loopbackDeviceConfig, &loopback_device);
+			result = ma_device_init_ex(backends, sizeof(backends) / sizeof(backends[0]), NULL, &loopbackDeviceConfig, &loopback_device);
+			if (result != MA_SUCCESS) {
+				if (sound_events == MA_TRUE)		play_from_memory(Error_wav, 15499);
+				alert(L"FPAudioDeviceInitializerError", L"Error initializing audio device for \"" + g_CurrentOutputDevice.name + L"\" with retcode " + std::to_wstring(result) + L".", MB_ICONERROR);
+				exit(result);
+			}
+
 		}
 		g_LoopbackProcess = MA_TRUE;
 		this->resume();
