@@ -614,6 +614,7 @@ ma_int32 WINAPI _stdcall MINIAUDIO_IMPLEMENTATION WinMain(HINSTANCE hInstance, H
 					ma_sound_uninit(&player);
 					g_SoundActive = false;
 				}
+				SendNotification(L"Closed.");
 				window_reset();
 				main_items_construct();
 				focus(record_manager);
