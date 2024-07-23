@@ -4,8 +4,10 @@
 #include "gui.h"
 #include "Openmanager.wav.h"
 #include "Pause.wav.h"
+#include "Provider.h"
 #include "Restart.wav.h"
 #include "start.wav.h"
+#include "stdafx.h"
 #include "Stop.wav.h"
 #include "Unpause.wav.h"
 #include "user_config.h"
@@ -16,18 +18,24 @@
 #include<filesystem>
 #include <locale>
 #include<mutex>
+#include <ole2.h>
 #include <tlhelp32.h>
+#include <UIAutomation.h>
+#include <Uiautomationcore.h>
 #define MINIAUDIO_IMPLEMENTATION
 #include "miniaudio.h"
 #include <chrono>
 #include<fstream>
+#include <wrl.h>
+#include <wrl/client.h>
 #include <iomanip>
 #include <iostream>
 #include<sstream>
 #include<thread>
 #include <vector>
 using namespace gui;
-bool unicode_convert(const std::string& str, std::wstring& output) {
+using namespace Microsoft::WRL;
+static bool _cdecl unicode_convert(const std::string& str, std::wstring& output) {
 	std::wstring_convert<std::codecvt_utf8_utf16<wchar_t>> converter;
 	try {
 		output = converter.from_bytes(str);
@@ -35,7 +43,7 @@ bool unicode_convert(const std::string& str, std::wstring& output) {
 	catch (const std::exception& e) { return false; }
 	return true;
 }
-bool unicode_convert(const std::wstring& str, std::string& output) {
+static bool _cdecl unicode_convert(const std::wstring& str, std::string& output) {
 	std::wstring_convert<std::codecvt_utf8_utf16<wchar_t>> converter;
 	try {
 		output = converter.to_bytes(str);
@@ -56,7 +64,42 @@ ma_bool32 sound_events = MA_FALSE;
 const ma_format buffer_format = ma_format_f32;
 const ma_uint32 periods = 0;
 user_config conf("fp.ini");
-bool run(const std::string& filename, const std::string& cmdline, bool wait_for_completion, bool background) {
+static void WINAPI SendNotification(const std::wstring& message) {
+	CoInitialize(NULL);
+
+	IUIAutomation* pAutomation = NULL;
+	HRESULT hr = CoCreateInstance(CLSID_CUIAutomation, NULL, CLSCTX_INPROC_SERVER, IID_IUIAutomation, (void**)&pAutomation);
+
+	if (SUCCEEDED(hr)) {
+		IUIAutomationCondition* pCondition = NULL;
+		VARIANT varName;
+		varName.vt = VT_BSTR;
+		varName.bstrVal = SysAllocString(L"");
+		hr = pAutomation->CreatePropertyConditionEx(UIA_NamePropertyId, varName, PropertyConditionFlags_None, &pCondition);
+
+		if (SUCCEEDED(hr)) {
+			Provider* pProvider = new Provider(GetForegroundWindow());
+			IUIAutomationElement* pElement = NULL;
+			hr = pAutomation->ElementFromHandle(GetForegroundWindow(), &pElement);
+
+			if (SUCCEEDED(hr)) {
+				hr = UiaRaiseNotificationEvent(pProvider, NotificationKind_ActionCompleted, NotificationProcessing_ImportantAll, SysAllocString(message.c_str()), SysAllocString(L""));
+
+				if (SUCCEEDED(hr)) {
+					pProvider->Release();
+				}
+			}
+
+			pCondition->Release();
+		}
+
+		pAutomation->Release();
+	}
+
+	CoUninitialize();
+}
+
+static bool WINAPI run(const std::string& filename, const std::string& cmdline, bool wait_for_completion, bool background) {
 	PROCESS_INFORMATION info;
 	STARTUPINFO si;
 	ZeroMemory(&si, sizeof(si));
@@ -81,14 +124,14 @@ bool run(const std::string& filename, const std::string& cmdline, bool wait_for_
 		return false;
 	if (wait_for_completion) {
 		while (WaitForSingleObject(info.hProcess, 0) == WAIT_TIMEOUT) {
-			wait(5);
+			ma_sleep(5);
 		}
 	}
 	CloseHandle(info.hProcess);
 	CloseHandle(info.hThread);
 	return true;
 }
-std::vector<std::wstring> get_files(const std::wstring& path) {
+static std::vector<std::wstring> WINAPI get_files(const std::wstring& path) {
 	std::vector<std::wstring> files;
 
 	try {
@@ -99,7 +142,7 @@ std::vector<std::wstring> get_files(const std::wstring& path) {
 		}
 	}
 	catch (const std::exception& e) {
-		std::cerr << "Error: " << e.what() << std::endl;
+		return files;
 	}
 
 	return files;
@@ -109,7 +152,7 @@ ma_sound player;
 bool g_EngineActive = false;
 bool g_SoundActive = false;
 std::wstring current_file;
-bool play(std::wstring filename) {
+bool MA_API play(std::wstring filename) {
 	if (filename == current_file and g_SoundActive) {
 		return ma_sound_start(&player) == MA_SUCCESS;
 	}
@@ -130,12 +173,12 @@ bool play(std::wstring filename) {
 	return false;
 }
 ma_decoder g_Decoder;
-bool play(std::string filename) {
+bool MA_API play(std::string filename) {
 	std::wstring filename_u;
 	unicode_convert(filename, filename_u);
 	return play(filename_u);
 }
-bool play_from_memory(const unsigned char data[], size_t data_size = 0) {
+bool MA_API play_from_memory(const unsigned char data[], size_t data_size = 0) {
 	if (&g_Decoder != nullptr)ma_decoder_uninit(&g_Decoder);
 	if (!g_EngineActive) {
 		if (ma_engine_init(nullptr, &mixer) == MA_SUCCESS)g_EngineActive = true;
@@ -153,7 +196,7 @@ bool play_from_memory(const unsigned char data[], size_t data_size = 0) {
 	}
 	return false;
 }
-std::string get_now() {
+std::string _cdecl get_now() {
 	auto now = std::chrono::system_clock::now();
 	std::time_t now_c = std::chrono::system_clock::to_time_t(now);
 
@@ -169,8 +212,8 @@ struct application {
 	std::wstring name;
 	ma_uint32 id;
 };
-application g_LoopbackApplication;
-std::vector<application> get_tasklist() {
+const application g_LoopbackApplication{ L"", 0 };
+std::vector<application> WINAPI get_tasklist() {
 	std::vector<application> tasklist;
 	HANDLE hSnapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
 	if (hSnapshot != INVALID_HANDLE_VALUE) {
@@ -209,7 +252,7 @@ ma_bool8 g_LoopbackProcess = MA_TRUE;
 ma_bool8 g_LoopbackReadyToMix = MA_FALSE;
 void MA_API audio_recorder_callback(ma_device* pDevice, void* pOutput, const void* pInput, ma_uint32 frameCount)
 {
-	ma_encoder* encoder = (ma_encoder*)pDevice->pUserData;
+	ma_encoder* encoder = reinterpret_cast<ma_encoder*>(pDevice->pUserData);
 	if (g_CurrentOutputDevice.name == L"NO")
 		ma_encoder_write_pcm_frames(encoder, pInput, frameCount, nullptr);
 	else {
@@ -230,19 +273,60 @@ void MA_API audio_recorder_callback_loopback(ma_device* pDevice, void* pOutput, 
 	loopback_frames = frameCount;
 	g_LoopbackReadyToMix = MA_TRUE;
 	(void)pOutput;
+	(void)pDevice;
 }
-
-
-class audio_recorder {
+class NamedMutex {
 public:
+	NamedMutex(const std::string& name) {
+		std::wstring name_u;
+		unicode_convert(name, name_u);
+		mutex_ = CreateMutexW(nullptr, FALSE, name_u.c_str());
+		if (mutex_ == nullptr) {
+			exit(EXIT_FAILURE);
+		}
+	}
+
+	~NamedMutex() {
+		CloseHandle(mutex_);
+	}
+
+	void lock() {
+		WaitForSingleObject(mutex_, INFINITE);
+	}
+
+	void unlock() {
+		ReleaseMutex(mutex_);
+	}
+	bool try_lock() {
+		return WaitForSingleObject(mutex_, 0) == WAIT_OBJECT_0; // Returns WAIT_OBJECT_0 on success
+	}
+private:
+	HANDLE mutex_;
+};
+
+// FPRecorder must be one instance of recorder class
+MA_API class MINIAUDIO_IMPLEMENTATION audio_recorder {
+private:
 	ma_device_config deviceConfig;
 	ma_device_config loopbackDeviceConfig;
 	ma_encoder_config encoderConfig;
 	ma_encoder encoder;
 	ma_device recording_device;
 	ma_device loopback_device;
+	NamedMutex* rec_mtx = nullptr;
+public:
 	std::string filename;
+	audio_recorder() = default;  // Default constructor
+	~audio_recorder() = default;  // Default destructor
+
+	audio_recorder(const audio_recorder&) = delete;
+	audio_recorder& operator=(const audio_recorder&) = delete;
+
+
 	void start() {
+		if (rec_mtx != nullptr and rec_mtx->try_lock() == false) {
+			exit(EXIT_FAILURE);
+		}
 		std::wstring record_path_u;
 		unicode_convert(record_path, record_path_u);
 		CreateDirectory(record_path_u.c_str(), nullptr);
@@ -280,6 +364,8 @@ public:
 		}
 		g_LoopbackProcess = MA_TRUE;
 		this->resume();
+		rec_mtx = new NamedMutex("FPRecorderRecording");
+		rec_mtx->lock();
 	}
 	void stop() {
 		ma_device_uninit(&recording_device);
@@ -287,6 +373,9 @@ public:
 			g_LoopbackProcess = MA_FALSE;
 			loopback_request.notify_one();
 			ma_device_uninit(&loopback_device);
+			rec_mtx->unlock();
+			delete rec_mtx;
+			rec_mtx = nullptr;
 		}
 		ma_encoder_uninit(&encoder);
 	}
@@ -300,13 +389,14 @@ public:
 	}
 	void resume() {
 		ma_device_start(&recording_device);
+		ma_sleep(5);
 		if (g_CurrentOutputDevice.name != L"NO") {
 			g_LoopbackProcess = MA_TRUE;
 			ma_device_start(&loopback_device);
 		}
 	}
 };
-std::vector<audio_device> get_input_audio_devices()
+std::vector<audio_device> MA_API get_input_audio_devices()
 {
 	std::vector<audio_device> audioDevices;
 	ma_result result;
@@ -336,7 +426,7 @@ std::vector<audio_device> get_input_audio_devices()
 	ma_context_uninit(&context);
 	return audioDevices;
 }
-std::vector<audio_device> get_output_audio_devices()
+std::vector<audio_device> MA_API get_output_audio_devices()
 {
 	std::vector<audio_device> audioDevices;
 	ma_result result;
@@ -391,7 +481,8 @@ HWND record_restart;
 std::vector<audio_device> in_audio_devices;
 std::vector < audio_device> out_audio_devices;
 std::vector<HWND> items;
-void window_reset() {
+// GUI functions
+static inline void window_reset() {
 	for (unsigned int i = 0; i < items.size(); i++) {
 		delete_control(items[i]);
 	}
@@ -464,7 +555,7 @@ void record_items_construct() {
 	focus(record_stop);
 }
 bool g_RecordingsManager = false;
-ma_int32 MA_API CALLBACK WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR     lpCmdLine, ma_int32       nShowCmd) {
+ma_int32 WINAPI _stdcall MINIAUDIO_IMPLEMENTATION WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, char* lpCmdLine, ma_int32       nShowCmd) {
 	if (strlen(lpCmdLine) != 0) {
 		play_from_memory(Error_wav, 15499);
 		ma_sleep(1000);
@@ -488,7 +579,7 @@ ma_int32 MA_API CALLBACK WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, L
 		std::string sevents = conf.read("sound-events");
 		sound_events = std::stoi(sevents);
 	}
-	else if (result < 0) {
+	else if (result > MA_ERROR) {
 		conf.write("sample-rate", std::to_string(sample_rate));
 		conf.write("channels", std::to_string(channels));
 		conf.write("buffer-size", std::to_string(buffer_size));
@@ -523,6 +614,17 @@ ma_int32 MA_API CALLBACK WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, L
 					ma_sound_uninit(&player);
 					g_SoundActive = false;
 				}
+				window_reset();
+				main_items_construct();
+				focus(record_manager);
+				g_RecordingsManager = false;
+			}
+			std::wstring record_path_u;
+			unicode_convert(record_path, record_path_u);
+			std::vector<wstring> files = get_files(record_path_u);
+			if (files.size() == 0) {
+				if (sound_events == MA_TRUE)		play_from_memory(Error_wav, 15499);
+				SendNotification(L"Error! There are no recordings.");
 				window_reset();
 				main_items_construct();
 				focus(record_manager);
@@ -629,5 +731,7 @@ ma_int32 MA_API CALLBACK WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, L
 			set_text(record_pause, L"&Pause recording");
 		}
 	}
+	(void)hInstance;
+	(void)hPrevInstance;
 	return MA_SUCCESS;
 }

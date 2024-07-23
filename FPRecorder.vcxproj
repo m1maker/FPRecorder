@@ -125,11 +125,13 @@
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <OptimizeReferences>true</OptimizeReferences>
       <GenerateDebugInformation>true</GenerateDebugInformation>
+      <AdditionalDependencies>$(CoreLibraryDependencies);%(AdditionalDependencies);uiautomationcore.lib</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="gui.cpp" />
     <ClCompile Include="main.cpp" />
+    <ClCompile Include="Provider.cpp" />
     <ClCompile Include="stb_vorbis.c" />
   </ItemGroup>
   <ItemGroup>
@@ -138,9 +140,11 @@
     <ClInclude Include="miniaudio.h" />
     <ClInclude Include="Openmanager.wav.h" />
     <ClInclude Include="Pause.wav.h" />
+    <ClInclude Include="Provider.h" />
     <ClInclude Include="Restart.wav.h" />
     <ClInclude Include="Start.wav.h" />
     <ClInclude Include="stb_vorbis.h" />
+    <ClInclude Include="stdafx.h" />
     <ClInclude Include="Stop.wav.h" />
     <ClInclude Include="Unpause.wav.h" />
     <ClInclude Include="user_config.h" />

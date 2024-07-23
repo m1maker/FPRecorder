@@ -4,6 +4,7 @@
     <ClCompile Include="main.cpp" />
     <ClCompile Include="stb_vorbis.c" />
     <ClCompile Include="gui.cpp" />
+    <ClCompile Include="Provider.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="Error.wav.h" />
@@ -17,5 +18,7 @@
     <ClInclude Include="Unpause.wav.h" />
     <ClInclude Include="user_config.h" />
     <ClInclude Include="gui.h" />
+    <ClInclude Include="Provider.h" />
+    <ClInclude Include="stdafx.h" />
   </ItemGroup>
 </Project>
