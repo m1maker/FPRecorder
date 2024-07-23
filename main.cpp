@@ -609,6 +609,15 @@ ma_int32 WINAPI _stdcall MINIAUDIO_IMPLEMENTATION WinMain(HINSTANCE hInstance, H
 	while (true) {
 		wait(5);
 		update_window(window);
+		if (gui::try_close) {
+			gui::try_close = false;
+			if (g_Recording) {
+				if (sound_events == MA_TRUE)		play_from_memory(Error_wav, 15499);
+				SendNotification(L"Unable to exit, while recording.");
+				continue;
+			}
+			exit(0);
+		}
 		if (is_pressed(record_manager) and !g_RecordingsManager) {
 			loopback_device = get_list_position(output_devices_list);
 			input_device = get_list_position(input_devices_list);

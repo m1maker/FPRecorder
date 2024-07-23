@@ -10,13 +10,14 @@ namespace gui {
 	bool g_KeysDown[256];
 	HWND g_CurrentFocused;
 	HWND g_MainWindow;
+	bool try_close = false;
 	LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 	{
 		switch (msg) {
-		case WM_DESTROY:
-			PostQuitMessage(0);
-			exit(0);
-			break;
+		case WM_CLOSE: {
+			try_close = true;
+			return 0;
+		}
 		default:
 			return DefWindowProc(hwnd, msg, wParam, lParam);
 		}

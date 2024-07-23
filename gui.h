@@ -9,6 +9,7 @@
 
 namespace gui {
 	LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
+	extern bool try_close;
 	HWND show_window(std::wstring title);
 	bool hide_window(HWND window);
 	void update_window(HWND window);
