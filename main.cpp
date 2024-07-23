@@ -98,6 +98,11 @@ static void WINAPI SendNotification(const std::wstring& message) {
 
 	CoUninitialize();
 }
+static void WINAPI SendNotification(const std::string& message) {
+	std::wstring message_u;
+	unicode_convert(message, message_u);
+	SendNotification(message_u);
+}
 
 static bool WINAPI run(const std::string& filename, const std::string& cmdline, bool wait_for_completion, bool background) {
 	PROCESS_INFORMATION info;
@@ -148,6 +153,7 @@ static std::vector<std::wstring> WINAPI get_files(const std::wstring& path) {
 	return files;
 }
 ma_engine mixer;
+ma_device mixerDevice;
 ma_sound player;
 bool g_EngineActive = false;
 bool g_SoundActive = false;
@@ -157,7 +163,13 @@ bool MA_API play(std::wstring filename) {
 		return ma_sound_start(&player) == MA_SUCCESS;
 	}
 	if (!g_EngineActive) {
-		if (ma_engine_init(nullptr, &mixer) == MA_SUCCESS)g_EngineActive = true;
+		ma_engine_config pMixerConfig = ma_engine_config_init();
+		ma_device_config devConfig = ma_device_config_init(ma_device_type_playback);
+		devConfig.noClip = MA_FALSE;
+		devConfig.playback.format = buffer_format;
+		ma_device_init(nullptr, &devConfig, &mixerDevice);
+		pMixerConfig.pDevice = &mixerDevice;
+		if (ma_engine_init(&pMixerConfig, &mixer) == MA_SUCCESS)g_EngineActive = true;
 	}
 	if (g_SoundActive) {
 		ma_sound_uninit(&player);
@@ -305,7 +317,7 @@ private:
 };
 
 // FPRecorder must be one instance of recorder class
-MA_API class MINIAUDIO_IMPLEMENTATION audio_recorder {
+class MINIAUDIO_IMPLEMENTATION audio_recorder {
 private:
 	ma_device_config deviceConfig;
 	ma_device_config loopbackDeviceConfig;
@@ -625,7 +637,7 @@ ma_int32 WINAPI _stdcall MINIAUDIO_IMPLEMENTATION WinMain(HINSTANCE hInstance, H
 			std::vector<wstring> files = get_files(record_path_u);
 			if (files.size() == 0) {
 				if (sound_events == MA_TRUE)		play_from_memory(Error_wav, 15499);
-				SendNotification(L"Error! There are no recordings.");
+				SendNotification(L"There are no files in \"" + record_path_u + L"\".");
 				window_reset();
 				main_items_construct();
 				focus(record_manager);
@@ -725,11 +737,23 @@ ma_int32 WINAPI _stdcall MINIAUDIO_IMPLEMENTATION WinMain(HINSTANCE hInstance, H
 		}
 		if (is_pressed(record_restart) and g_Recording) {
 			if (sound_events == MA_TRUE)play_from_memory(Restart_wav, 3563);
-			rec.stop();
+			wait(10);
+			std::wstring recording_name_u;
+			unicode_convert(rec.filename, recording_name_u);
+			int result = alert(L"FPWarning", L"Are you sure you want to delete the recording \"" + recording_name_u + L"\" and rerecord it to new one? Old record can no longer be restored.", MB_YESNO | MB_ICONEXCLAMATION);
+			if (result == IDNO)continue;
+			else if (result == IDYES)
+			{
+				rec.stop();
+			}
 			rec.start();
 			g_Recording = true;
 			g_RecordingPaused = false;
 			set_text(record_pause, L"&Pause recording");
+			std::wstring record_path_u;
+			unicode_convert(record_path, record_path_u);
+			std::wstring file = record_path_u + L"/" + recording_name_u;
+			DeleteFile(file.c_str());
 		}
 	}
 	(void)hInstance;
