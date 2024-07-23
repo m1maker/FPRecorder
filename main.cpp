@@ -337,6 +337,7 @@ public:
 
 	void start() {
 		if (rec_mtx != nullptr and rec_mtx->try_lock() == false) {
+			delete this;
 			exit(EXIT_FAILURE);
 		}
 		std::wstring record_path_u;
@@ -401,7 +402,6 @@ public:
 	}
 	void resume() {
 		ma_device_start(&recording_device);
-		ma_sleep(5);
 		if (g_CurrentOutputDevice.name != L"NO") {
 			g_LoopbackProcess = MA_TRUE;
 			ma_device_start(&loopback_device);
@@ -604,6 +604,7 @@ ma_int32 WINAPI _stdcall MINIAUDIO_IMPLEMENTATION WinMain(HINSTANCE hInstance, H
 		conf.save();
 	}
 	window = show_window(L"FPRecorder " + version);
+	MA_ASSERT(window != 0);
 	main_items_construct();
 	while (true) {
 		wait(5);
@@ -736,7 +737,6 @@ ma_int32 WINAPI _stdcall MINIAUDIO_IMPLEMENTATION WinMain(HINSTANCE hInstance, H
 			ma_sleep(100);
 		}
 		if (is_pressed(record_restart) and g_Recording) {
-			if (sound_events == MA_TRUE)play_from_memory(Restart_wav, 3563);
 			wait(10);
 			std::wstring recording_name_u;
 			unicode_convert(rec.filename, recording_name_u);
@@ -750,10 +750,8 @@ ma_int32 WINAPI _stdcall MINIAUDIO_IMPLEMENTATION WinMain(HINSTANCE hInstance, H
 			g_Recording = true;
 			g_RecordingPaused = false;
 			set_text(record_pause, L"&Pause recording");
-			std::wstring record_path_u;
-			unicode_convert(record_path, record_path_u);
-			std::wstring file = record_path_u + L"/" + recording_name_u;
-			DeleteFile(file.c_str());
+			DeleteFile(recording_name_u.c_str());
+			if (sound_events == MA_TRUE)play_from_memory(Restart_wav, 3563);
 		}
 	}
 	(void)hInstance;
