@@ -326,9 +326,9 @@ void MA_API audio_recorder_callback(ma_device* pDevice, void* pOutput, const voi
 	}
 	if (g_CurrentOutputDevice.name == L"NO") {
 		void* pInputOut = nullptr;
-		ma_uint64 frameCountOut;
+		ma_uint64 frameCountOut = 2000;
 		ma_uint64 frameCountToProcess = frameCount;
-		ma_data_converter_process_pcm_frames(&g_Converter, pInput, &frameCountToProcess, pInputOut, &frameCountOut);
+		ma_data_converter_process_pcm_frames__format_only(&g_Converter, pInput, &frameCountToProcess, pInputOut, &frameCountOut);
 		ma_encoder_write_pcm_frames(encoder, pInputOut, frameCountOut, nullptr);
 	}
 	else {
@@ -691,7 +691,7 @@ ma_int32 WINAPI _stdcall MINIAUDIO_IMPLEMENTATION WinMain(HINSTANCE hInstance, H
 			std::string sformat = conf.read("sample-format");
 			ma_bool32 parse_result = try_parse_format(sformat.c_str(), &buffer_format);
 			if (parse_result == MA_FALSE) {
-				throw std::exception("Error parsing format");
+				throw std::exception("Invalid sample format parameter");
 			}
 		}
 		catch (const std::exception& e) {
