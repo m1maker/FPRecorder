@@ -265,10 +265,16 @@ ma_event microphone_event;
 ma_bool8 g_LoopbackProcess = MA_TRUE;
 bool thread_shutdown = false;
 bool paused = false;
+ma_bool8 g_NullSamplesDestroyed = MA_FALSE;
 void MA_API audio_recorder_callback(ma_device* pDevice, void* pOutput, const void* pInput, ma_uint32 frameCount)
 {
 	if (paused)return;
 	ma_encoder* encoder = reinterpret_cast<ma_encoder*>(pDevice->pUserData);
+	float* pInputFloat = (float*)(pInput);
+	for (ma_uint32 i = 0; i < frameCount; i++) {
+		if (pInputFloat[i] == 0)return;
+		else g_NullSamplesDestroyed = MA_TRUE;
+	}
 	if (g_CurrentOutputDevice.name == L"NO")
 		ma_encoder_write_pcm_frames(encoder, pInput, frameCount, nullptr);
 	else {
@@ -280,6 +286,11 @@ void MA_API audio_recorder_callback(ma_device* pDevice, void* pOutput, const voi
 }
 void MA_API audio_recorder_callback_loopback(ma_device* pDevice, void* pOutput, const void* pInput, ma_uint32 frameCount) {
 	if (paused)return;
+	float* pInputFloat = (float*)(pInput);
+	for (ma_uint32 i = 0; i < frameCount; i++) {
+		if (pInputFloat[i] == 0)return;
+		else g_NullSamplesDestroyed = MA_TRUE;
+	}
 	if (!g_LoopbackProcess)return;
 	loopback_buffer = (float*)pInput;
 	loopback_frames = frameCount;
@@ -426,10 +437,12 @@ public:
 		ma_encoder_uninit(&encoder);
 		ma_event_uninit(&loopback_event);
 		ma_event_uninit(&microphone_event);
+		g_NullSamplesDestroyed = MA_FALSE;
 	}
 	inline void pause() {
 		thread_shutdown = true;
 		paused = true;
+		g_NullSamplesDestroyed = MA_FALSE;
 	}
 	inline void resume() {
 		thread_shutdown = false;
