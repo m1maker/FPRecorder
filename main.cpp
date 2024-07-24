@@ -249,7 +249,7 @@ struct audio_device {
 };
 audio_device g_CurrentInputDevice;
 audio_device g_CurrentOutputDevice;
-auto MA_API mix(float* input1, float* input2, ma_uint32 frameCountFirst, ma_uint32 frameCountLast)->float* {
+MA_API float* mix(float* input1, float* input2, ma_uint32 frameCountFirst, ma_uint32 frameCountLast) {
 	float* result = new float[frameCountFirst + frameCountLast];
 	for (ma_uint32 i = 0; i < frameCountFirst + frameCountLast; i++) {
 		result[i] = (input1[i] + input2[i]);
@@ -257,35 +257,45 @@ auto MA_API mix(float* input1, float* input2, ma_uint32 frameCountFirst, ma_uint
 	return result;
 }
 float* loopback_buffer = nullptr;
+float* microphone_buffer = nullptr;
 ma_uint32 loopback_frames;
-condition_variable loopback_request;
-mutex loopback_lock;
+ma_uint32 microphone_frames;
+ma_event loopback_event;
+ma_event microphone_event;
 ma_bool8 g_LoopbackProcess = MA_TRUE;
-ma_bool8 g_LoopbackReadyToMix = MA_FALSE;
+bool thread_shutdown = false;
+bool paused = false;
 void MA_API audio_recorder_callback(ma_device* pDevice, void* pOutput, const void* pInput, ma_uint32 frameCount)
 {
+	if (paused)return;
 	ma_encoder* encoder = reinterpret_cast<ma_encoder*>(pDevice->pUserData);
 	if (g_CurrentOutputDevice.name == L"NO")
 		ma_encoder_write_pcm_frames(encoder, pInput, frameCount, nullptr);
 	else {
-		loopback_request.notify_one();
-		if (loopback_buffer == nullptr)return;
-		while (g_LoopbackReadyToMix == MA_FALSE) {}
-		float* result = mix((float*)pInput, loopback_buffer, frameCount, loopback_frames);
-		ma_encoder_write_pcm_frames(encoder, result, frameCount, nullptr);
-		g_LoopbackReadyToMix = MA_FALSE;
+		microphone_buffer = (float*)pInput;
+		microphone_frames = frameCount;
+		ma_event_signal(&microphone_event);
 	}
 	(void)pOutput;
 }
-unique_lock<mutex> loopback_mtx(loopback_lock);
 void MA_API audio_recorder_callback_loopback(ma_device* pDevice, void* pOutput, const void* pInput, ma_uint32 frameCount) {
+	if (paused)return;
 	if (!g_LoopbackProcess)return;
-	loopback_request.wait(loopback_mtx);
 	loopback_buffer = (float*)pInput;
 	loopback_frames = frameCount;
-	g_LoopbackReadyToMix = MA_TRUE;
+	ma_event_signal(&loopback_event);
 	(void)pOutput;
 	(void)pDevice;
+}
+void recording_thread(ma_encoder* encoder) {
+	while (!thread_shutdown) {
+		ma_event_wait(&microphone_event);
+		ma_event_wait(&loopback_event);
+		if (microphone_buffer != nullptr and loopback_buffer != nullptr) {
+			float* result = mix(microphone_buffer, loopback_buffer, microphone_frames, loopback_frames);
+			ma_encoder_write_pcm_frames(encoder, (const void*)result, microphone_frames, nullptr);
+		}
+	}
 }
 class NamedMutex {
 public:
@@ -335,11 +345,13 @@ public:
 	audio_recorder& operator=(const audio_recorder&) = delete;
 
 
-	void start() {
+	inline void start() {
 		if (rec_mtx != nullptr and rec_mtx->try_lock() == false) {
 			delete this;
 			exit(EXIT_FAILURE);
 		}
+		ma_event_init(&loopback_event);
+		ma_event_init(&microphone_event);
 		std::wstring record_path_u;
 		unicode_convert(record_path, record_path_u);
 		CreateDirectory(record_path_u.c_str(), nullptr);
@@ -370,6 +382,7 @@ public:
 			alert(L"FPAudioDeviceInitializerError", L"Error initializing audio device for \"" + g_CurrentInputDevice.name + L"\" with retcode " + std::to_wstring(result) + L".", MB_ICONERROR);
 			exit(result);
 		}
+		ma_device_start(&recording_device);
 		if (g_CurrentOutputDevice.name != L"NO") {
 			loopbackDeviceConfig = ma_device_config_init(ma_device_type_loopback);
 			loopbackDeviceConfig.capture.pDeviceID = &g_CurrentOutputDevice.id;
@@ -391,39 +404,38 @@ public:
 				alert(L"FPAudioDeviceInitializerError", L"Error initializing audio device for \"" + g_CurrentOutputDevice.name + L"\" with retcode " + std::to_wstring(result) + L".", MB_ICONERROR);
 				exit(result);
 			}
-
+			ma_device_start(&loopback_device);
 		}
 		g_LoopbackProcess = MA_TRUE;
 		this->resume();
 		rec_mtx = new NamedMutex("FPRecorderRecording");
 		rec_mtx->lock();
 	}
-	void stop() {
+	inline void stop() {
+		ma_event_signal(&microphone_event);
 		ma_device_uninit(&recording_device);
 		if (g_CurrentOutputDevice.name != L"NO") {
+			thread_shutdown = true;
 			g_LoopbackProcess = MA_FALSE;
-			loopback_request.notify_one();
+			ma_event_signal(&loopback_event);
 			ma_device_uninit(&loopback_device);
 			rec_mtx->unlock();
 			delete rec_mtx;
 			rec_mtx = nullptr;
 		}
 		ma_encoder_uninit(&encoder);
+		ma_event_uninit(&loopback_event);
+		ma_event_uninit(&microphone_event);
 	}
-	void pause() {
-		ma_device_stop(&recording_device);
-		if (g_CurrentOutputDevice.name != L"NO") {
-			g_LoopbackProcess = MA_FALSE;
-			loopback_request.notify_all();
-			ma_device_stop(&loopback_device);
-		}
+	inline void pause() {
+		thread_shutdown = true;
+		paused = true;
 	}
-	void resume() {
-		ma_device_start(&recording_device);
-		if (g_CurrentOutputDevice.name != L"NO") {
-			g_LoopbackProcess = MA_TRUE;
-			ma_device_start(&loopback_device);
-		}
+	inline void resume() {
+		thread_shutdown = false;
+		std::thread t(recording_thread, &encoder);
+		t.detach();
+		paused = false;
 	}
 };
 std::vector<audio_device> MA_API get_input_audio_devices()
@@ -621,7 +633,7 @@ ma_int32 WINAPI _stdcall MINIAUDIO_IMPLEMENTATION WinMain(HINSTANCE hInstance, H
 			if (last_name_u.empty())last_name_u = L"None";
 			if (last_value_u.empty())last_value_u = L"Null";
 			alert(L"FPConfigParsingError", L"An error occurred while loading the existing config file. Error details:\n\"" + what_u + L"\"\nParameter: \"" + last_name_u + L"\".\nValue: \"" + last_value_u + L"\".", MB_ICONERROR);
-			exit(-2);
+			exit(0 - 2);
 		}
 	}
 	else if (result == -1) {
