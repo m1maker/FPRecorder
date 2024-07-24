@@ -61,7 +61,7 @@ std::string audio_format = "wav";
 int input_device = 0;
 int loopback_device = 0;
 ma_bool32 sound_events = MA_FALSE;
-const ma_format buffer_format = ma_format_f32;
+ma_format buffer_format = ma_format_f32;
 const ma_uint32 periods = 0;
 user_config conf("fp.ini");
 static void WINAPI SendNotification(const std::wstring& message) {
@@ -208,6 +208,54 @@ bool MA_API play_from_memory(const unsigned char data[], size_t data_size = 0) {
 	}
 	return false;
 }
+MA_API ma_bool32 try_parse_format(const char* str, ma_format* pValue)
+{
+	ma_format format;
+
+	/*  */ if (strcmp(str, "u8") == 0) {
+		format = ma_format_u8;
+	}
+	else if (strcmp(str, "s16") == 0) {
+		format = ma_format_s16;
+	}
+	else if (strcmp(str, "s24") == 0) {
+		format = ma_format_s24;
+	}
+	else if (strcmp(str, "s32") == 0) {
+		format = ma_format_s32;
+	}
+	else if (strcmp(str, "f32") == 0) {
+		format = ma_format_f32;
+	}
+	else {
+		return MA_FALSE;    /* Not a format. */
+	}
+
+	if (pValue != NULL) {
+		*pValue = format;
+	}
+
+	return MA_TRUE;
+}
+
+MA_API const char* ma_format_to_string(ma_format format) {
+	switch (format) {
+	case ma_format_u8:
+		return "u8";
+	case ma_format_s16:
+		return "s16";
+	case ma_format_s24:
+		return "s24";
+	case ma_format_s32:
+		return "s32";
+	case ma_format_f32:
+		return "f32";
+	default:
+		return NULL;
+	}
+}
+
+
 std::string _cdecl get_now() {
 	auto now = std::chrono::system_clock::now();
 	std::time_t now_c = std::chrono::system_clock::to_time_t(now);
@@ -266,6 +314,7 @@ ma_bool8 g_LoopbackProcess = MA_TRUE;
 bool thread_shutdown = false;
 bool paused = false;
 ma_bool8 g_NullSamplesDestroyed = MA_FALSE;
+ma_data_converter g_Converter;
 void MA_API audio_recorder_callback(ma_device* pDevice, void* pOutput, const void* pInput, ma_uint32 frameCount)
 {
 	if (paused)return;
@@ -275,8 +324,13 @@ void MA_API audio_recorder_callback(ma_device* pDevice, void* pOutput, const voi
 		if (pInputFloat[i] == 0)return;
 		else g_NullSamplesDestroyed = MA_TRUE;
 	}
-	if (g_CurrentOutputDevice.name == L"NO")
-		ma_encoder_write_pcm_frames(encoder, pInput, frameCount, nullptr);
+	if (g_CurrentOutputDevice.name == L"NO") {
+		void* pInputOut = nullptr;
+		ma_uint64 frameCountOut;
+		ma_uint64 frameCountToProcess = frameCount;
+		ma_data_converter_process_pcm_frames(&g_Converter, pInput, &frameCountToProcess, pInputOut, &frameCountOut);
+		ma_encoder_write_pcm_frames(encoder, pInputOut, frameCountOut, nullptr);
+	}
 	else {
 		microphone_buffer = (float*)pInput;
 		microphone_frames = frameCount;
@@ -380,7 +434,7 @@ public:
 		deviceConfig = ma_device_config_init(ma_device_type_capture);
 		if (g_CurrentInputDevice.name != L"NO")
 			deviceConfig.capture.pDeviceID = &g_CurrentInputDevice.id;
-		deviceConfig.capture.format = buffer_format;
+		deviceConfig.capture.format = ma_format_f32;
 		deviceConfig.capture.channels = channels;
 		deviceConfig.sampleRate = sample_rate;
 		deviceConfig.periodSizeInFrames = buffer_size;
@@ -397,7 +451,7 @@ public:
 		if (g_CurrentOutputDevice.name != L"NO") {
 			loopbackDeviceConfig = ma_device_config_init(ma_device_type_loopback);
 			loopbackDeviceConfig.capture.pDeviceID = &g_CurrentOutputDevice.id;
-			loopbackDeviceConfig.capture.format = buffer_format;
+			loopbackDeviceConfig.capture.format = ma_format_f32;
 			loopbackDeviceConfig.capture.channels = channels;
 			loopbackDeviceConfig.sampleRate = sample_rate;
 			loopbackDeviceConfig.periodSizeInFrames = buffer_size;
@@ -634,6 +688,11 @@ ma_int32 WINAPI _stdcall MINIAUDIO_IMPLEMENTATION WinMain(HINSTANCE hInstance, H
 			loopback_device = std::stoi(oud);
 			std::string sevents = conf.read("sound-events");
 			sound_events = std::stoi(sevents);
+			std::string sformat = conf.read("sample-format");
+			ma_bool32 parse_result = try_parse_format(sformat.c_str(), &buffer_format);
+			if (parse_result == MA_FALSE) {
+				throw std::exception("Error parsing format");
+			}
 		}
 		catch (const std::exception& e) {
 			std::string what = e.what();
@@ -659,7 +718,14 @@ ma_int32 WINAPI _stdcall MINIAUDIO_IMPLEMENTATION WinMain(HINSTANCE hInstance, H
 		conf.write("input-device", std::to_string(input_device));
 		conf.write("loopback-device", std::to_string(loopback_device));
 		conf.write("sound-events", std::to_string(sound_events));
+		conf.write("sample-format", string(ma_format_to_string(buffer_format)));
 		conf.save();
+	}
+	ma_data_converter_config converter_config = ma_data_converter_config_init(ma_format_f32, buffer_format, channels, channels, sample_rate, sample_rate);
+	ma_result init_result = ma_data_converter_init(&converter_config, nullptr, &g_Converter);
+	if (init_result != MA_SUCCESS) {
+		alert(L"FPConverterInitializerError", L"Error initializing data converter.", MB_ICONERROR);
+		exit(-3);
 	}
 	window = show_window(L"FPRecorder " + version);
 	MA_ASSERT(window != 0);
