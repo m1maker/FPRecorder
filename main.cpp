@@ -5,6 +5,8 @@
 #include "Openmanager.wav.h"
 #include "Pause.wav.h"
 #include "Provider.h"
+#include "readme.h"
+#include "resource1.h"
 #include "Restart.wav.h"
 #include "start.wav.h"
 #include "stdafx.h"
@@ -51,7 +53,6 @@ static bool _cdecl unicode_convert(const std::wstring& str, std::string& output)
 	catch (const std::exception& e) { return false; }
 	return true;
 }
-
 ma_uint32 sample_rate = 44100;
 ma_uint32 channels = 2;
 ma_uint32 buffer_size = 1024;
@@ -103,6 +104,18 @@ static void WINAPI SendNotification(const std::string& message) {
 	unicode_convert(message, message_u);
 	SendNotification(message_u);
 }
+static HHOOK g_KeyboardHook;
+static LRESULT _stdcall KeyboardProc(int nCode, WPARAM wParam, LPARAM lParam) {
+	if (nCode >= 0) {
+		if (wParam == WM_KEYDOWN) {
+			KBDLLHOOKSTRUCT* kbd = (KBDLLHOOKSTRUCT*)lParam;
+			int key = kbd->vkCode;
+		}
+
+		return CallNextHookEx(g_KeyboardHook, nCode, wParam, lParam);
+	}
+}
+
 
 static bool WINAPI run(const std::string& filename, const std::string& cmdline, bool wait_for_completion, bool background) {
 	PROCESS_INFORMATION info;
@@ -664,7 +677,37 @@ void record_items_construct() {
 	focus(record_stop);
 }
 bool g_RecordingsManager = false;
+static LRESULT CALLBACK DialogProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
+{
+	switch (msg)
+	{
+	case WM_INITDIALOG:
+		return TRUE;
+	case WM_COMMAND:
+		switch (LOWORD(wParam))
+		{
+		case IDOK:
+			EndDialog(window, 0);
+			DestroyWindow(window);
+			return TRUE;
+		}
+		return FALSE;
+	}
+	return false;
+}
+
 ma_int32 WINAPI _stdcall MINIAUDIO_IMPLEMENTATION WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, char* lpCmdLine, ma_int32       nShowCmd) {
+
+	window = CreateDialog(NULL, MAKEINTRESOURCE(IDD_DIALOG1), NULL, DialogProc);
+	ShowWindow(window, SW_SHOW);
+	SetDlgItemTextW(window, IDC_EDIT1, README.c_str());
+	MSG msg;
+	while (GetMessage(&msg, NULL, NULL, 0) && IsWindow(window)) {
+		if (!IsDialogMessage(window, &msg)) {
+			TranslateMessage(&msg);
+			DispatchMessage(&msg);
+		}
+	}
 	if (strlen(lpCmdLine) != 0) {
 		play_from_memory(Error_wav, 15499);
 		ma_sleep(1000);
@@ -729,6 +772,7 @@ ma_int32 WINAPI _stdcall MINIAUDIO_IMPLEMENTATION WinMain(HINSTANCE hInstance, H
 	}
 	window = show_window(L"FPRecorder " + version);
 	MA_ASSERT(window != 0);
+	g_KeyboardHook = SetWindowsHookEx(WH_KEYBOARD_LL, KeyboardProc, GetModuleHandle(NULL), 0);
 	main_items_construct();
 	while (true) {
 		wait(5);
@@ -740,6 +784,7 @@ ma_int32 WINAPI _stdcall MINIAUDIO_IMPLEMENTATION WinMain(HINSTANCE hInstance, H
 				SendNotification(L"Unable to exit, while recording.");
 				continue;
 			}
+			UnhookWindowsHookEx(g_KeyboardHook);
 			exit(0);
 		}
 		if (is_pressed(record_manager) and !g_RecordingsManager) {

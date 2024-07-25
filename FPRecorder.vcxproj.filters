@@ -20,5 +20,11 @@
     <ClInclude Include="gui.h" />
     <ClInclude Include="Provider.h" />
     <ClInclude Include="stdafx.h" />
+    <ClInclude Include="readme.h" />
+    <ClInclude Include="resource.h" />
+    <ClInclude Include="resource1.h" />
+  </ItemGroup>
+  <ItemGroup>
+    <ResourceCompile Include="FPRecorder.rc" />
   </ItemGroup>
 </Project>

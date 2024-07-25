@@ -144,6 +144,9 @@
     <ClInclude Include="Openmanager.wav.h" />
     <ClInclude Include="Pause.wav.h" />
     <ClInclude Include="Provider.h" />
+    <ClInclude Include="readme.h" />
+    <ClInclude Include="resource.h" />
+    <ClInclude Include="resource1.h" />
     <ClInclude Include="Restart.wav.h" />
     <ClInclude Include="Start.wav.h" />
     <ClInclude Include="stb_vorbis.h" />
@@ -151,6 +154,9 @@
     <ClInclude Include="Stop.wav.h" />
     <ClInclude Include="Unpause.wav.h" />
     <ClInclude Include="user_config.h" />
+  </ItemGroup>
+  <ItemGroup>
+    <ResourceCompile Include="FPRecorder.rc" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
