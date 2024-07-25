@@ -158,6 +158,9 @@
   <ItemGroup>
     <ResourceCompile Include="FPRecorder.rc" />
   </ItemGroup>
+  <ItemGroup>
+    <None Include="resource1.hm" />
+  </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
   </ImportGroup>

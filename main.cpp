@@ -695,19 +695,19 @@ static LRESULT CALLBACK DialogProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
 	}
 	return false;
 }
+std::wstring WINAPI get_exe() {
+	vector<wchar_t> pathBuf;
+	DWORD copied = 0;
+	do {
+		pathBuf.resize(pathBuf.size() + MAX_PATH);
+		copied = GetModuleFileName(0, &pathBuf.at(0), pathBuf.size());
+	} while (copied >= pathBuf.size());
 
+	pathBuf.resize(copied);
+
+	return std::wstring(pathBuf.begin(), pathBuf.end());
+}
 ma_int32 WINAPI _stdcall MINIAUDIO_IMPLEMENTATION WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, char* lpCmdLine, ma_int32       nShowCmd) {
-
-	window = CreateDialog(NULL, MAKEINTRESOURCE(IDD_DIALOG1), NULL, DialogProc);
-	ShowWindow(window, SW_SHOW);
-	SetDlgItemTextW(window, IDC_EDIT1, README.c_str());
-	MSG msg;
-	while (GetMessage(&msg, NULL, NULL, 0) && IsWindow(window)) {
-		if (!IsDialogMessage(window, &msg)) {
-			TranslateMessage(&msg);
-			DispatchMessage(&msg);
-		}
-	}
 	if (strlen(lpCmdLine) != 0) {
 		play_from_memory(Error_wav, 15499);
 		ma_sleep(1000);
@@ -763,6 +763,21 @@ ma_int32 WINAPI _stdcall MINIAUDIO_IMPLEMENTATION WinMain(HINSTANCE hInstance, H
 		conf.write("sound-events", std::to_string(sound_events));
 		conf.write("sample-format", string(ma_format_to_string(buffer_format)));
 		conf.save();
+		window = CreateDialog(NULL, MAKEINTRESOURCE(IDD_DIALOG1), NULL, DialogProc);
+		if (!IsWindow(window)) {
+			alert(L"FPWelcomeDialogInitializerError", L"File: " + get_exe() + L"\\.rsrc\\DIALOG\\" + std::to_wstring(IDD_DIALOG1) + L" not found.", MB_ICONERROR);
+			exit(-4);
+		}
+		ShowWindow(window, SW_SHOW);
+		SetDlgItemTextW(window, IDC_EDIT1, README.c_str());
+		MSG msg;
+		while (GetMessage(&msg, NULL, NULL, 0) && IsWindow(window)) {
+			if (!IsDialogMessage(window, &msg)) {
+				TranslateMessage(&msg);
+				DispatchMessage(&msg);
+			}
+		}
+
 	}
 	ma_data_converter_config converter_config = ma_data_converter_config_init(ma_format_f32, buffer_format, channels, channels, sample_rate, sample_rate);
 	ma_result init_result = ma_data_converter_init(&converter_config, nullptr, &g_Converter);

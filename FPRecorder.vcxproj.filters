@@ -27,4 +27,7 @@
   <ItemGroup>
     <ResourceCompile Include="FPRecorder.rc" />
   </ItemGroup>
+  <ItemGroup>
+    <None Include="resource1.hm" />
+  </ItemGroup>
 </Project>
