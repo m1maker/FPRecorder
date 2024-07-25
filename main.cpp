@@ -709,6 +709,7 @@ std::wstring WINAPI get_exe() {
 }
 ma_int32 WINAPI _stdcall MINIAUDIO_IMPLEMENTATION WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, char* lpCmdLine, ma_int32       nShowCmd) {
 	if (strlen(lpCmdLine) != 0) {
+		MessageBeep(MB_ICONERROR);
 		play_from_memory(Error_wav, 15499);
 		ma_sleep(1000);
 		return MA_ERROR;
@@ -752,17 +753,7 @@ ma_int32 WINAPI _stdcall MINIAUDIO_IMPLEMENTATION WinMain(HINSTANCE hInstance, H
 		}
 	}
 	else if (result == -1) {
-		conf.write("sample-rate", std::to_string(sample_rate));
-		conf.write("channels", std::to_string(channels));
-		conf.write("buffer-size", std::to_string(buffer_size));
-		conf.write("filename-signature", filename_signature);
-		conf.write("record-path", record_path);
-		conf.write("audio-format", audio_format);
-		conf.write("input-device", std::to_string(input_device));
-		conf.write("loopback-device", std::to_string(loopback_device));
-		conf.write("sound-events", std::to_string(sound_events));
-		conf.write("sample-format", string(ma_format_to_string(buffer_format)));
-		conf.save();
+		MessageBeep(0xFFFFFFFF);
 		window = CreateDialog(NULL, MAKEINTRESOURCE(IDD_DIALOG1), NULL, DialogProc);
 		if (!IsWindow(window)) {
 			alert(L"FPWelcomeDialogInitializerError", L"File: " + get_exe() + L"\\.rsrc\\DIALOG\\" + std::to_wstring(IDD_DIALOG1) + L" not found.", MB_ICONERROR);
@@ -778,6 +769,18 @@ ma_int32 WINAPI _stdcall MINIAUDIO_IMPLEMENTATION WinMain(HINSTANCE hInstance, H
 			}
 		}
 
+
+		conf.write("sample-rate", std::to_string(sample_rate));
+		conf.write("channels", std::to_string(channels));
+		conf.write("buffer-size", std::to_string(buffer_size));
+		conf.write("filename-signature", filename_signature);
+		conf.write("record-path", record_path);
+		conf.write("audio-format", audio_format);
+		conf.write("input-device", std::to_string(input_device));
+		conf.write("loopback-device", std::to_string(loopback_device));
+		conf.write("sound-events", std::to_string(sound_events));
+		conf.write("sample-format", string(ma_format_to_string(buffer_format)));
+		conf.save();
 	}
 	ma_data_converter_config converter_config = ma_data_converter_config_init(ma_format_f32, buffer_format, channels, channels, sample_rate, sample_rate);
 	ma_result init_result = ma_data_converter_init(&converter_config, nullptr, &g_Converter);
