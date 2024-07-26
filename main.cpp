@@ -746,8 +746,8 @@ std::wstring WINAPI get_exe() {
 
 	return std::wstring(pathBuf.begin(), pathBuf.end());
 }
-ma_int32 WINAPI _stdcall MINIAUDIO_IMPLEMENTATION WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, char* lpCmdLine, ma_int32       nShowCmd) {
-	if (strlen(lpCmdLine) != 0) {
+ma_int32 APIENTRY WINAPI _stdcall MINIAUDIO_IMPLEMENTATION wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, wchar_t* lpCmdLine, ma_int32       nShowCmd) {
+	if (wcslen(lpCmdLine) != 0) {
 		MessageBeep(MB_ICONERROR);
 		play_from_memory(Error_wav, 15499);
 		ma_sleep(1000);
