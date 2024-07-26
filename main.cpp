@@ -62,7 +62,7 @@ std::string audio_format = "wav";
 int input_device = 0;
 int loopback_device = 0;
 ma_bool32 sound_events = MA_FALSE;
-ma_format buffer_format = ma_format_f32;
+ma_format buffer_format = ma_format_s16;
 const ma_uint32 periods = 0;
 user_config conf("fp.ini");
 static void WINAPI SendNotification(const std::wstring& message) {
@@ -310,15 +310,58 @@ struct audio_device {
 };
 audio_device g_CurrentInputDevice;
 audio_device g_CurrentOutputDevice;
-MA_API float* mix(float* input1, float* input2, ma_uint32 frameCountFirst, ma_uint32 frameCountLast) {
+MA_API float* mix_f32(float* input1, float* input2, ma_uint32 frameCountFirst, ma_uint32 frameCountLast) {
 	float* result = new float[frameCountFirst + frameCountLast];
 	for (ma_uint32 i = 0; i < frameCountFirst + frameCountLast; i++) {
 		result[i] = (input1[i] + input2[i]);
 	}
 	return result;
 }
-float* loopback_buffer = nullptr;
-float* microphone_buffer = nullptr;
+MA_API void* mix_s32(const void* input1, const void* input2, ma_uint32 frameCountFirst, ma_uint32 frameCountLast, ma_uint32 channels) {
+	ma_int32* result = (ma_int32*)malloc((frameCountFirst + frameCountLast) * channels * sizeof(ma_int32));
+	for (ma_uint32 i = 0; i < (frameCountFirst + frameCountLast) * channels; i++) {
+		result[i] = ((const ma_int32*)input1)[i] + ((const ma_int32*)input2)[i];
+	}
+	return result;
+}
+
+
+MA_API void* mix_s24(const void* input1, const void* input2, ma_uint32 frameCountFirst, ma_uint32 frameCountLast, ma_uint32 channels) {
+	ma_uint8* result = (ma_uint8*)malloc((frameCountFirst + frameCountLast) * channels * 3 * sizeof(ma_uint8));
+	for (ma_uint32 i = 0; i < (frameCountFirst + frameCountLast) * channels * 3; i += 3) {
+		ma_int32 sample1 = (((const ma_uint8*)input1)[i] << 8) | (((const ma_uint8*)input1)[i + 1] << 16) | (((const ma_uint8*)input1)[i + 2] << 24);
+		ma_int32 sample2 = (((const ma_uint8*)input2)[i] << 8) | (((const ma_uint8*)input2)[i + 1] << 16) | (((const ma_uint8*)input2)[i + 2] << 24);
+		ma_int32 mixedSample = sample1 + sample2;
+		result[i] = (ma_uint8)(mixedSample >> 8);
+		result[i + 1] = (ma_uint8)(mixedSample >> 16);
+		result[i + 2] = (ma_uint8)(mixedSample >> 24);
+	}
+	return result;
+}
+
+
+
+MA_API void* mix_s16(const void* input1, const void* input2, ma_uint32 frameCountFirst, ma_uint32 frameCountLast, ma_uint32 channels) {
+	ma_int16* result = (ma_int16*)malloc((frameCountFirst + frameCountLast) * channels * sizeof(ma_int16));
+	for (ma_uint32 i = 0; i < (frameCountFirst + frameCountLast) * channels; i++) {
+		result[i] = ((const ma_int16*)input1)[i] + ((const ma_int16*)input2)[i];
+	}
+	return result;
+}
+
+
+
+MA_API void* mix_u8(const void* input1, const void* input2, ma_uint32 frameCountFirst, ma_uint32 frameCountLast, ma_uint32 channels) {
+	ma_uint8* result = (ma_uint8*)malloc((frameCountFirst + frameCountLast) * channels * sizeof(ma_uint8));
+	for (ma_uint32 i = 0; i < (frameCountFirst + frameCountLast) * channels; i++) {
+		result[i] = ((const ma_uint8*)input1)[i] + ((const ma_uint8*)input2)[i];
+	}
+	return result;
+}
+
+
+void* loopback_buffer = nullptr;
+void* microphone_buffer = nullptr;
 ma_uint32 loopback_frames;
 ma_uint32 microphone_frames;
 ma_event loopback_event;
@@ -332,20 +375,11 @@ void MA_API audio_recorder_callback(ma_device* pDevice, void* pOutput, const voi
 {
 	if (paused)return;
 	ma_encoder* encoder = reinterpret_cast<ma_encoder*>(pDevice->pUserData);
-	float* pInputFloat = (float*)(pInput);
-	for (ma_uint32 i = 0; i < frameCount; i++) {
-		if (pInputFloat[i] == 0)return;
-		else g_NullSamplesDestroyed = MA_TRUE;
-	}
 	if (g_CurrentOutputDevice.name == L"NO") {
-		void* pInputOut = nullptr;
-		ma_uint64 frameCountOut = 2000;
-		ma_uint64 frameCountToProcess = frameCount;
-		ma_data_converter_process_pcm_frames__format_only(&g_Converter, pInput, &frameCountToProcess, pInputOut, &frameCountOut);
-		ma_encoder_write_pcm_frames(encoder, pInputOut, frameCountOut, nullptr);
+		ma_encoder_write_pcm_frames(encoder, pInput, frameCount, nullptr);
 	}
 	else {
-		microphone_buffer = (float*)pInput;
+		microphone_buffer = (void*)pInput;
 		microphone_frames = frameCount;
 		ma_event_signal(&microphone_event);
 	}
@@ -353,13 +387,8 @@ void MA_API audio_recorder_callback(ma_device* pDevice, void* pOutput, const voi
 }
 void MA_API audio_recorder_callback_loopback(ma_device* pDevice, void* pOutput, const void* pInput, ma_uint32 frameCount) {
 	if (paused)return;
-	float* pInputFloat = (float*)(pInput);
-	for (ma_uint32 i = 0; i < frameCount; i++) {
-		if (pInputFloat[i] == 0)return;
-		else g_NullSamplesDestroyed = MA_TRUE;
-	}
 	if (!g_LoopbackProcess)return;
-	loopback_buffer = (float*)pInput;
+	loopback_buffer = (void*)pInput;
 	loopback_frames = frameCount;
 	ma_event_signal(&loopback_event);
 	(void)pOutput;
@@ -370,8 +399,18 @@ void recording_thread(ma_encoder* encoder) {
 		ma_event_wait(&microphone_event);
 		ma_event_wait(&loopback_event);
 		if (microphone_buffer != nullptr and loopback_buffer != nullptr) {
-			float* result = mix(microphone_buffer, loopback_buffer, microphone_frames, loopback_frames);
-			ma_encoder_write_pcm_frames(encoder, (const void*)result, microphone_frames, nullptr);
+			void* result = nullptr;
+			if (buffer_format == ma_format_f32)
+				result = mix_f32((float*)microphone_buffer, (float*)loopback_buffer, microphone_frames, loopback_frames);
+			else if (buffer_format = ma_format_s32)
+				result = mix_s32(microphone_buffer, loopback_buffer, microphone_frames, loopback_frames, channels);
+			else if (buffer_format = ma_format_s24)
+				result = mix_s24(microphone_buffer, loopback_buffer, microphone_frames, loopback_frames, channels);
+			else if (buffer_format = ma_format_s16)
+				result = mix_s16(microphone_buffer, loopback_buffer, microphone_frames, loopback_frames, channels);
+			else if (buffer_format = ma_format_u8)
+				result = mix_u8(microphone_buffer, loopback_buffer, microphone_frames, loopback_frames, channels);
+			ma_encoder_write_pcm_frames(encoder, result, microphone_frames, nullptr);
 		}
 	}
 }
@@ -447,7 +486,7 @@ public:
 		deviceConfig = ma_device_config_init(ma_device_type_capture);
 		if (g_CurrentInputDevice.name != L"NO")
 			deviceConfig.capture.pDeviceID = &g_CurrentInputDevice.id;
-		deviceConfig.capture.format = ma_format_f32;
+		deviceConfig.capture.format = buffer_format;
 		deviceConfig.capture.channels = channels;
 		deviceConfig.sampleRate = sample_rate;
 		deviceConfig.periodSizeInFrames = buffer_size;
@@ -464,7 +503,7 @@ public:
 		if (g_CurrentOutputDevice.name != L"NO") {
 			loopbackDeviceConfig = ma_device_config_init(ma_device_type_loopback);
 			loopbackDeviceConfig.capture.pDeviceID = &g_CurrentOutputDevice.id;
-			loopbackDeviceConfig.capture.format = ma_format_f32;
+			loopbackDeviceConfig.capture.format = buffer_format;
 			loopbackDeviceConfig.capture.channels = channels;
 			loopbackDeviceConfig.sampleRate = sample_rate;
 			loopbackDeviceConfig.periodSizeInFrames = buffer_size;
@@ -753,6 +792,7 @@ ma_int32 WINAPI _stdcall MINIAUDIO_IMPLEMENTATION WinMain(HINSTANCE hInstance, H
 		}
 	}
 	else if (result == -1) {
+		play_from_memory(Restart_wav, 3563);
 		MessageBeep(0xFFFFFFFF);
 		window = CreateDialog(NULL, MAKEINTRESOURCE(IDD_DIALOG1), NULL, DialogProc);
 		if (!IsWindow(window)) {
