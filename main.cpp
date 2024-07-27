@@ -166,7 +166,6 @@ static std::vector<std::wstring> WINAPI get_files(const std::wstring& path) {
 	return files;
 }
 ma_engine mixer;
-ma_device mixerDevice;
 ma_sound player;
 bool g_EngineActive = false;
 bool g_SoundActive = false;
@@ -176,13 +175,7 @@ bool MA_API play(std::wstring filename) {
 		return ma_sound_start(&player) == MA_SUCCESS;
 	}
 	if (!g_EngineActive) {
-		ma_engine_config pMixerConfig = ma_engine_config_init();
-		ma_device_config devConfig = ma_device_config_init(ma_device_type_playback);
-		devConfig.noClip = MA_FALSE;
-		devConfig.playback.format = buffer_format;
-		ma_device_init(nullptr, &devConfig, &mixerDevice);
-		pMixerConfig.pDevice = &mixerDevice;
-		if (ma_engine_init(&pMixerConfig, &mixer) == MA_SUCCESS)g_EngineActive = true;
+		if (ma_engine_init(nullptr, &mixer) == MA_SUCCESS)g_EngineActive = true;
 	}
 	if (g_SoundActive) {
 		ma_sound_uninit(&player);
@@ -345,7 +338,7 @@ void MA_API audio_recorder_callback(ma_device* pDevice, void* pOutput, const voi
 		void* pInputOut = (void*)pInput;
 		ma_uint64 frameCountToProcess = frameCount;
 		ma_uint64 frameCountOut = frameCount * 2;
-		ma_data_converter_process_pcm_frames(&g_Converter, pInput, &frameCountToProcess, pInputOut, &frameCountOut);
+		ma_data_converter_process_pcm_frames__format_only(&g_Converter, pInput, &frameCountToProcess, pInputOut, &frameCountOut);
 		ma_encoder_write_pcm_frames(encoder, pInputOut, frameCountOut, nullptr);
 	}
 	else {
@@ -374,7 +367,7 @@ void recording_thread(ma_encoder* encoder) {
 			void* pInputOut = (void*)result;
 			ma_uint64 frameCountToProcess = microphone_frames;
 			ma_uint64 frameCountOut = microphone_frames * 2;
-			ma_data_converter_process_pcm_frames(&g_Converter, result, &frameCountToProcess, pInputOut, &frameCountOut);
+			ma_data_converter_process_pcm_frames__format_only(&g_Converter, result, &frameCountToProcess, pInputOut, &frameCountOut);
 			ma_encoder_write_pcm_frames(encoder, pInputOut, frameCountOut, nullptr);
 		}
 	}
@@ -431,6 +424,16 @@ public:
 		if (rec_mtx != nullptr and rec_mtx->try_lock() == false) {
 			delete this;
 			exit(EXIT_FAILURE);
+		}
+		loopback_buffer = nullptr;
+		microphone_buffer = nullptr;
+		loopback_frames = 0;
+		microphone_frames = 0;
+		ma_data_converter_config converter_config = ma_data_converter_config_init(ma_format_f32, buffer_format, channels, channels, sample_rate, sample_rate);
+		ma_result init_result = ma_data_converter_init(&converter_config, nullptr, &g_Converter);
+		if (init_result != MA_SUCCESS) {
+			alert(L"FPConverterInitializerError", L"Error initializing data converter.", MB_ICONERROR);
+			exit(-3);
 		}
 		ma_event_init(&loopback_event);
 		ma_event_init(&microphone_event);
@@ -509,6 +512,7 @@ public:
 		ma_event_uninit(&loopback_event);
 		ma_event_uninit(&microphone_event);
 		g_NullSamplesDestroyed = MA_FALSE;
+		ma_data_converter_uninit(&g_Converter, nullptr);
 	}
 	inline void pause() {
 		thread_shutdown = true;
@@ -790,12 +794,6 @@ ma_int32 APIENTRY WINAPI _stdcall MINIAUDIO_IMPLEMENTATION wWinMain(HINSTANCE hI
 		conf.write("sound-events", std::to_string(sound_events));
 		conf.write("sample-format", string(ma_format_to_string(buffer_format)));
 		conf.save();
-	}
-	ma_data_converter_config converter_config = ma_data_converter_config_init(ma_format_f32, buffer_format, channels, channels, sample_rate, sample_rate);
-	ma_result init_result = ma_data_converter_init(&converter_config, nullptr, &g_Converter);
-	if (init_result != MA_SUCCESS) {
-		alert(L"FPConverterInitializerError", L"Error initializing data converter.", MB_ICONERROR);
-		exit(-3);
 	}
 	window = show_window(L"FPRecorder " + version);
 	MA_ASSERT(window != 0);
