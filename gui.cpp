@@ -61,6 +61,7 @@ namespace gui {
 		}
 		ShowWindow(hwnd, SW_SHOW);
 		UpdateWindow(hwnd);
+		SetForegroundWindow(hwnd);
 		g_MainWindow = hwnd;
 		return hwnd;
 	}
@@ -98,6 +99,13 @@ namespace gui {
 			{
 				TranslateMessage(&msg);
 				DispatchMessage(&msg);
+				if (GetForegroundWindow() == window) {
+					g_CurrentFocused = GetFocus();
+				}
+				if (GetFocus() != g_CurrentFocused) {
+					SetFocus(g_CurrentFocused);
+					SetForegroundWindow(window);
+				}
 			}
 		}
 	}
@@ -408,7 +416,7 @@ namespace gui {
 
 	bool is_pressed(HWND hwndButton)
 	{
-		return SendMessage(hwndButton, BM_GETSTATE, 0, 0) & BST_PUSHED;
+		return (SendMessage(hwndButton, BM_GETSTATE, 0, 0) & BST_PUSHED) or (GetFocus() == hwndButton && key_pressed(VK_RETURN));
 	}
 
 	bool is_readOnly(HWND hwndEdit)

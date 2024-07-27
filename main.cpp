@@ -685,6 +685,10 @@ static LRESULT CALLBACK DialogProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
 {
 	switch (msg)
 	{
+	case WM_CLOSE: {
+		MessageBeep(MB_ICONERROR);
+		return TRUE;
+	}
 	case WM_INITDIALOG:
 		return TRUE;
 	case WM_COMMAND:
