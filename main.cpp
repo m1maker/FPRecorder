@@ -117,37 +117,79 @@ static LRESULT _stdcall KeyboardProc(int nCode, WPARAM wParam, LPARAM lParam) {
 }
 
 
-static bool WINAPI run(const std::string& filename, const std::string& cmdline, bool wait_for_completion, bool background) {
-	PROCESS_INFORMATION info;
-	STARTUPINFO si;
-	ZeroMemory(&si, sizeof(si));
-	si.cb = sizeof(si);
-	si.dwFlags = STARTF_USESHOWWINDOW;
-	si.wShowWindow = (background ? SW_HIDE : SW_SHOW);
-	char c_cmdline[32768];
-	c_cmdline[0] = 0;
-	if (cmdline.size() > 0) {
-		std::string tmp = "\"";
-		tmp += filename;
-		tmp += "\" ";
-		tmp += cmdline;
-		strncpy(c_cmdline, tmp.c_str(), tmp.size());
-		c_cmdline[tmp.size()] = 0;
+static int ExecSystemCmd(const std::string& str, std::string& out)
+{
+	// Convert the command to UTF16 to properly handle unicode path names
+	wchar_t bufUTF16[10000];
+	MultiByteToWideChar(CP_UTF8, 0, str.c_str(), -1, bufUTF16, 10000);
+
+	// Create a pipe to capture the stdout from the system command
+	HANDLE pipeRead, pipeWrite;
+	SECURITY_ATTRIBUTES secAttr = { 0 };
+	secAttr.nLength = sizeof(SECURITY_ATTRIBUTES);
+	secAttr.bInheritHandle = TRUE;
+	secAttr.lpSecurityDescriptor = NULL;
+	if (!CreatePipe(&pipeRead, &pipeWrite, &secAttr, 0))
+		return -1;
+
+	// Start the process for the system command, informing the pipe to 
+	// capture stdout, and also to skip showing the command window
+	STARTUPINFOW si = { 0 };
+	si.cb = sizeof(STARTUPINFOW);
+	si.dwFlags = STARTF_USESHOWWINDOW | STARTF_USESTDHANDLES;
+	si.hStdOutput = pipeWrite;
+	si.hStdError = pipeWrite;
+	si.wShowWindow = SW_HIDE;
+	PROCESS_INFORMATION pi = { 0 };
+	BOOL success = CreateProcessW(NULL, bufUTF16, NULL, NULL, TRUE, CREATE_NEW_CONSOLE, NULL, NULL, &si, &pi);
+	if (!success)
+	{
+		CloseHandle(pipeWrite);
+		CloseHandle(pipeRead);
+		return -1;
 	}
-	std::wstring filename_u, cmdline_u;
-	unicode_convert(filename, filename_u);
-	unicode_convert(cmdline, cmdline_u);
-	BOOL r = CreateProcess(filename_u.c_str(), &cmdline_u[0], NULL, NULL, FALSE, INHERIT_CALLER_PRIORITY, NULL, NULL, &si, &info);
-	if (r == FALSE)
-		return false;
-	if (wait_for_completion) {
-		while (WaitForSingleObject(info.hProcess, 0) == WAIT_TIMEOUT) {
-			ma_sleep(5);
+
+	// Run the command until the end, while capturing stdout
+	for (;;)
+	{
+		// Wait for a while to allow the process to work
+		DWORD ret = WaitForSingleObject(pi.hProcess, 50);
+
+		// Read from the stdout if there is any data
+		for (;;)
+		{
+			char buf[1024];
+			DWORD readCount = 0;
+			DWORD availCount = 0;
+
+			if (!::PeekNamedPipe(pipeRead, NULL, 0, NULL, &availCount, NULL))
+				break;
+
+			if (availCount == 0)
+				break;
+
+			if (!::ReadFile(pipeRead, buf, sizeof(buf) - 1 < availCount ? sizeof(buf) - 1 : availCount, &readCount, NULL) || !readCount)
+				break;
+
+			buf[readCount] = 0;
+			out += buf;
 		}
+
+		// End the loop if the process finished
+		if (ret == WAIT_OBJECT_0)
+			break;
 	}
-	CloseHandle(info.hProcess);
-	CloseHandle(info.hThread);
-	return true;
+
+	// Get the return status from the process
+	DWORD status = 0;
+	GetExitCodeProcess(pi.hProcess, &status);
+
+	CloseHandle(pipeRead);
+	CloseHandle(pipeWrite);
+	CloseHandle(pi.hProcess);
+	CloseHandle(pi.hThread);
+
+	return status;
 }
 static std::vector<std::wstring> WINAPI get_files(const std::wstring& path) {
 	std::vector<std::wstring> files;
@@ -402,7 +444,7 @@ private:
 };
 
 // FPRecorder must be one instance of recorder class
-class MINIAUDIO_IMPLEMENTATION audio_recorder {
+class MINIAUDIO_IMPLEMENTATION CAudioRecorder {
 private:
 	ma_device_config deviceConfig;
 	ma_device_config loopbackDeviceConfig;
@@ -413,11 +455,11 @@ private:
 	NamedMutex* rec_mtx = nullptr;
 public:
 	std::string filename;
-	audio_recorder() = default;  // Default constructor
-	~audio_recorder() = default;  // Default destructor
+	CAudioRecorder() = default;  // Default constructor
+	~CAudioRecorder() = default;  // Default destructor
 
-	audio_recorder(const audio_recorder&) = delete;
-	audio_recorder& operator=(const audio_recorder&) = delete;
+	CAudioRecorder(const CAudioRecorder&) = delete;
+	CAudioRecorder& operator=(const CAudioRecorder&) = delete;
 
 
 	inline void start() {
@@ -591,7 +633,7 @@ std::vector<audio_device> MA_API get_output_audio_devices()
 
 HWND window;
 const std::wstring version = L"0.0.0";
-audio_recorder rec;
+CAudioRecorder rec;
 HWND record_start;
 HWND input_devices_text;
 HWND input_devices_list;
@@ -917,10 +959,14 @@ ma_int32 APIENTRY WINAPI _stdcall MINIAUDIO_IMPLEMENTATION wWinMain(HINSTANCE hI
 			window_reset();
 			main_items_construct();
 			if (audio_format != "wav") {
-				bool result = run("ffmpeg.exe", "-i \"" + rec.filename + "\" \"" + rec.filename + "." + audio_format + "\"", false, true);
-				if (result == false) {
+				ma_sleep(100);
+				string output;
+				int result = ExecSystemCmd("ffmpeg.exe -i \"" + rec.filename + "\" \"" + rec.filename + "." + audio_format + "\"", output);
+				if (result != 0) {
 					if (sound_events == MA_TRUE)play_from_memory(Error_wav, 15499);
-					alert(L"FPError", L"\"ffmpeg.exe\" was not found. Can't convert audio file!", MB_ICONERROR);
+					wstring output_u;
+					unicode_convert(output, output_u);
+					alert(L"FPError", L"Process exit failure!\nRetcode: " + std::to_wstring(result) + L"\nOutput: \"" + output_u + L"\".", MB_ICONERROR);
 				}
 			}
 		}

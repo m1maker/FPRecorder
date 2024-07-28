@@ -54,7 +54,7 @@ namespace gui {
 			return nullptr;
 		}
 
-		HWND hwnd = CreateWindowExW(256, L"NGTApp", title.c_str(), WS_OVERLAPPEDWINDOW | WS_CAPTION | WS_VISIBLE, CW_USEDEFAULT, CW_USEDEFAULT, 800, 600, NULL, NULL, hInstance, NULL);
+		HWND hwnd = CreateWindowExW(256, L"NGTApp", title.c_str(), WS_VISIBLE | WS_CAPTION | WS_OVERLAPPED, CW_USEDEFAULT, CW_USEDEFAULT, 800, 600, NULL, NULL, hInstance, NULL);
 		if (!hwnd)
 		{
 			return nullptr;
@@ -101,10 +101,6 @@ namespace gui {
 				DispatchMessage(&msg);
 				if (GetForegroundWindow() == window) {
 					g_CurrentFocused = GetFocus();
-				}
-				if (GetFocus() != g_CurrentFocused) {
-					SetFocus(g_CurrentFocused);
-					SetForegroundWindow(window);
 				}
 			}
 		}
@@ -154,7 +150,7 @@ namespace gui {
 
 		while (elapsed < time)
 		{
-			update_window(GetActiveWindow());
+			update_window(g_MainWindow);
 			elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - startTime).count();
 		}
 	}
