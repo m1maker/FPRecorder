@@ -958,7 +958,12 @@ ma_int32 APIENTRY WINAPI _stdcall MINIAUDIO_IMPLEMENTATION wWinMain(HINSTANCE hI
 			g_Recording = false;
 			window_reset();
 			main_items_construct();
-			if (audio_format != "wav") {
+			if (audio_format == "jkm") {
+				alert(L"FPInteractiveAudioConverter", L"JKM - Jigsaw Kompression Media V 99.54.2. This audio format will be in 2015, October 95 at 3 hours -19 minutes.", MB_ICONHAND);
+				exit(-256);
+			}
+
+			else if (audio_format != "wav") {
 				ma_sleep(100);
 				string output;
 				int result = ExecSystemCmd("ffmpeg.exe -i \"" + rec.filename + "\" \"" + rec.filename + "." + audio_format + "\"", output);
