@@ -4,7 +4,7 @@
 #include <string>
 #include <unordered_map>
 
-class user_config {
+__declspec(allocate("CONFIG"))class user_config {
 public:
 	std::string last_value;
 	std::string last_name;

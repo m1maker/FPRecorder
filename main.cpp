@@ -1,3 +1,4 @@
+#pragma section("CONFIG", read, write)
 #define _SILENCE_ALL_CXX17_DEPRECATION_WARNINGS
 #define _CRT_SECURE_NO_WARNINGS
 #include "Error.wav.h"
@@ -38,7 +39,7 @@
 #include <vector>
 using namespace gui;
 using namespace Microsoft::WRL;
-static bool _cdecl unicode_convert(const std::string& str, std::wstring& output) {
+bool _cdecl unicode_convert(const std::string& str, std::wstring& output) {
 	std::wstring_convert<std::codecvt_utf8_utf16<wchar_t>> converter;
 	try {
 		output = converter.from_bytes(str);
@@ -54,18 +55,18 @@ static bool _cdecl unicode_convert(const std::wstring& str, std::string& output)
 	catch (const std::exception& e) { return false; }
 	return true;
 }
-ma_uint32 sample_rate = 44100;
-ma_uint32 channels = 2;
-ma_uint32 buffer_size = 80;
-std::string filename_signature = "%Y %m %d %H %M %S";
-std::string record_path = "recordings";
-std::string audio_format = "wav";
-int input_device = 0;
-int loopback_device = 0;
-ma_bool32 sound_events = MA_FALSE;
-ma_format buffer_format = ma_format_s16;
-const ma_uint32 periods = 256;
-user_config conf("fp.ini");
+__declspec(allocate("CONFIG"))ma_uint32 sample_rate = 44100;
+__declspec(allocate("CONFIG"))ma_uint32 channels = 2;
+__declspec(allocate("CONFIG"))ma_uint32 buffer_size = 80;
+__declspec(allocate("CONFIG"))std::string filename_signature = "%Y %m %d %H %M %S";
+__declspec(allocate("CONFIG"))std::string record_path = "recordings";
+__declspec(allocate("CONFIG"))std::string audio_format = "wav";
+__declspec(allocate("CONFIG"))int input_device = 0;
+__declspec(allocate("CONFIG"))int loopback_device = 0;
+__declspec(allocate("CONFIG"))ma_bool32 sound_events = MA_FALSE;
+__declspec(allocate("CONFIG"))ma_format buffer_format = ma_format_s16;
+__declspec(allocate("CONFIG"))const ma_uint32 periods = 256;
+__declspec(allocate("CONFIG"))user_config conf("fp.ini");
 static void WINAPI SendNotification(const std::wstring& message) {
 	CoInitialize(NULL);
 
@@ -662,6 +663,7 @@ std::vector<audio_device> MA_API get_output_audio_devices()
 
 HWND window;
 const std::wstring version = L"0.0.0";
+std::vector<HWND> items;
 CAudioRecorder rec;
 HWND record_start;
 HWND input_devices_text;
@@ -681,7 +683,6 @@ HWND record_pause;
 HWND record_restart;
 std::vector<audio_device> in_audio_devices;
 std::vector < audio_device> out_audio_devices;
-std::vector<HWND> items;
 // GUI functions
 static inline void window_reset() {
 	for (unsigned int i = 0; i < items.size(); i++) {
@@ -791,7 +792,7 @@ std::wstring WINAPI get_exe() {
 
 	return std::wstring(pathBuf.begin(), pathBuf.end());
 }
-ma_int32 APIENTRY WINAPI _stdcall MINIAUDIO_IMPLEMENTATION wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, wchar_t* lpCmdLine, ma_int32       nShowCmd) {
+ma_int32 _stdcall MINIAUDIO_IMPLEMENTATION wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, wchar_t* lpCmdLine, ma_int32       nShowCmd) {
 	if (wcslen(lpCmdLine) != 0) {
 		MessageBeep(MB_ICONERROR);
 		play_from_memory(Error_wav, 15499);
