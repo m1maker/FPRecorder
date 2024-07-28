@@ -55,7 +55,7 @@ static bool _cdecl unicode_convert(const std::wstring& str, std::string& output)
 }
 ma_uint32 sample_rate = 44100;
 ma_uint32 channels = 2;
-ma_uint32 buffer_size = 1024;
+ma_uint32 buffer_size = 256;
 std::string filename_signature = "%Y %m %d %H %M %S";
 std::string record_path = "recordings";
 std::string audio_format = "wav";
@@ -499,7 +499,7 @@ public:
 		deviceConfig.capture.format = ma_format_f32;
 		deviceConfig.capture.channels = channels;
 		deviceConfig.sampleRate = sample_rate;
-		deviceConfig.periodSizeInFrames = buffer_size;
+		deviceConfig.periodSizeInMilliseconds = buffer_size;
 		deviceConfig.periods = periods;
 		deviceConfig.dataCallback = audio_recorder_callback;
 		deviceConfig.pUserData = &encoder;
@@ -516,7 +516,7 @@ public:
 			loopbackDeviceConfig.capture.format = ma_format_f32;
 			loopbackDeviceConfig.capture.channels = channels;
 			loopbackDeviceConfig.sampleRate = sample_rate;
-			loopbackDeviceConfig.periodSizeInFrames = buffer_size;
+			loopbackDeviceConfig.periodSizeInMilliseconds = buffer_size;
 			loopbackDeviceConfig.periods = periods;
 			loopbackDeviceConfig.dataCallback = audio_recorder_callback_loopback;
 			loopbackDeviceConfig.pUserData = nullptr;
