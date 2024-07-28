@@ -722,6 +722,7 @@ void main_items_construct() {
 	focus(record_start);
 }
 void record_manager_items_construct() {
+	SendNotification(record_path);
 	items_view_text = create_text(window, L"Items view", 10, 10, 0, 10, 0);
 	items.push_back(items_view_text);
 	items_view_list = create_list(window, 10, 10, 0, 10, 0);
@@ -899,7 +900,6 @@ ma_int32 APIENTRY WINAPI _stdcall MINIAUDIO_IMPLEMENTATION wWinMain(HINSTANCE hI
 			window_reset();
 			record_manager_items_construct();
 			if (sound_events == MA_TRUE)play_from_memory(Openmanager_wav, 20673);
-
 			g_RecordingsManager = true;
 		}
 		if (g_RecordingsManager) {
@@ -1002,6 +1002,7 @@ ma_int32 APIENTRY WINAPI _stdcall MINIAUDIO_IMPLEMENTATION wWinMain(HINSTANCE hI
 				ma_sleep(100);
 				string output;
 				std::vector<std::string> split = string_split(".wav", rec.filename);
+				SendNotification(L"Converting...");
 				int result = ExecSystemCmd("ffmpeg.exe -i \"" + rec.filename + "\" \"" + split[0] + "." + audio_format + "\"", output);
 				if (result != 0) {
 					if (sound_events == MA_TRUE)play_from_memory(Error_wav, 15499);
