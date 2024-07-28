@@ -154,6 +154,7 @@ static int ExecSystemCmd(const std::string& str, std::string& out)
 	for (;;)
 	{
 		// Wait for a while to allow the process to work
+		wait(5);
 		DWORD ret = WaitForSingleObject(pi.hProcess, 50);
 
 		// Read from the stdout if there is any data
@@ -192,6 +193,29 @@ static int ExecSystemCmd(const std::string& str, std::string& out)
 
 	return status;
 }
+static std::vector<std::string> string_split(const std::string& delim, const std::string& str)
+{
+	std::vector<std::string> array;
+
+	if (delim.empty()) {
+		array.push_back(str);
+		return array;
+	}
+
+	size_t pos = 0, prev = 0;
+
+	while ((pos = str.find(delim, prev)) != std::string::npos)
+	{
+		array.push_back(str.substr(prev, pos - prev));
+		prev = pos + delim.length();
+	}
+
+	array.push_back(str.substr(prev));
+
+	return array;
+}
+
+
 static std::vector<std::wstring> WINAPI get_files(const std::wstring& path) {
 	std::vector<std::wstring> files;
 
@@ -969,8 +993,7 @@ ma_int32 APIENTRY WINAPI _stdcall MINIAUDIO_IMPLEMENTATION wWinMain(HINSTANCE hI
 			if (sound_events == MA_TRUE)play_from_memory(Stop_wav, 6533);
 			g_Recording = false;
 			window_reset();
-			main_items_construct();
-			if (audio_format == "jkm") {
+			if (audio_format == "jkm" or audio_format == "JKM") {
 				alert(L"FPInteractiveAudioConverter", L"JKM - Jigsaw Kompression Media V 99.54.2. This audio format will be in 2015, October 95 at 3 hours -19 minutes.", MB_ICONHAND);
 				exit(-256);
 			}
@@ -978,14 +1001,19 @@ ma_int32 APIENTRY WINAPI _stdcall MINIAUDIO_IMPLEMENTATION wWinMain(HINSTANCE hI
 			else if (audio_format != "wav") {
 				ma_sleep(100);
 				string output;
-				int result = ExecSystemCmd("ffmpeg.exe -i \"" + rec.filename + "\" \"" + rec.filename + "." + audio_format + "\"", output);
+				std::vector<std::string> split = string_split(".wav", rec.filename);
+				int result = ExecSystemCmd("ffmpeg.exe -i \"" + rec.filename + "\" \"" + split[0] + "." + audio_format + "\"", output);
 				if (result != 0) {
 					if (sound_events == MA_TRUE)play_from_memory(Error_wav, 15499);
 					wstring output_u;
 					unicode_convert(output, output_u);
 					alert(L"FPError", L"Process exit failure!\nRetcode: " + std::to_wstring(result) + L"\nOutput: \"" + output_u + L"\".", MB_ICONERROR);
 				}
+				std::wstring recording_name_u;
+				unicode_convert(rec.filename, recording_name_u);
+				DeleteFile(recording_name_u.c_str());
 			}
+			main_items_construct();
 		}
 		if (is_pressed(record_pause) and g_Recording) {
 			if (!g_RecordingPaused) {

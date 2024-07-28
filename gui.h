@@ -12,7 +12,7 @@ namespace gui {
 	extern bool try_close;
 	HWND show_window(std::wstring title);
 	bool hide_window(HWND window);
-	void update_window(HWND window);
+	void update_window(HWND window, bool wait_event = true);
 	bool key_pressed(int keyCode);
 	bool key_released(int keyCode);
 	bool key_down(int keyCode);

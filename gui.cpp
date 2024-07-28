@@ -69,39 +69,39 @@ namespace gui {
 		if (window == nullptr)return false;
 		return ShowWindow(window, SW_HIDE);
 	}
-	void update_window(HWND window)
+	void update_window(HWND window, bool wait_event)
 	{
 		MSG msg;
 		UpdateWindow(window);
-
-		if (GetMessage(&msg, NULL, 0, 0))
-		{
-			switch (msg.message) {
-			case WM_KEYDOWN:
-				g_KeysDown[msg.wParam] = true;
-				if (g_KeysPressed[msg.wParam] == false && g_KeysReleased[msg.wParam] == true && g_KeysDown[msg.wParam] == true)
-				{
-					g_KeysPressed[msg.wParam] = true;
-					g_KeysReleased[msg.wParam] = false;
-				}
-				else if (g_KeysReleased[msg.wParam] == false)
-				{
-					g_KeysPressed[msg.wParam] = false;
-				}
-				break;
-			case WM_KEYUP:
-				g_KeysDown[msg.wParam] = false;
-				g_KeysPressed[msg.wParam] = false;
-				g_KeysReleased[msg.wParam] = true;
-				break;
-			}
-			if (!IsDialogMessage(window, &msg))
+		if (wait_event)
+			GetMessage(&msg, NULL, 0, 0);
+		else
+			PeekMessage(&msg, NULL, 0, 0, PM_REMOVE);
+		switch (msg.message) {
+		case WM_KEYDOWN:
+			g_KeysDown[msg.wParam] = true;
+			if (g_KeysPressed[msg.wParam] == false && g_KeysReleased[msg.wParam] == true && g_KeysDown[msg.wParam] == true)
 			{
-				TranslateMessage(&msg);
-				DispatchMessage(&msg);
-				if (GetForegroundWindow() == window) {
-					g_CurrentFocused = GetFocus();
-				}
+				g_KeysPressed[msg.wParam] = true;
+				g_KeysReleased[msg.wParam] = false;
+			}
+			else if (g_KeysReleased[msg.wParam] == false)
+			{
+				g_KeysPressed[msg.wParam] = false;
+			}
+			break;
+		case WM_KEYUP:
+			g_KeysDown[msg.wParam] = false;
+			g_KeysPressed[msg.wParam] = false;
+			g_KeysReleased[msg.wParam] = true;
+			break;
+		}
+		if (!IsDialogMessage(window, &msg))
+		{
+			TranslateMessage(&msg);
+			DispatchMessage(&msg);
+			if (GetForegroundWindow() == window) {
+				g_CurrentFocused = GetFocus();
 			}
 		}
 	}
@@ -150,7 +150,7 @@ namespace gui {
 
 		while (elapsed < time)
 		{
-			update_window(g_MainWindow);
+			update_window(g_MainWindow, false);
 			elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - startTime).count();
 		}
 	}
