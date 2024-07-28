@@ -56,7 +56,7 @@ static bool _cdecl unicode_convert(const std::wstring& str, std::string& output)
 }
 ma_uint32 sample_rate = 44100;
 ma_uint32 channels = 2;
-ma_uint32 buffer_size = 20;
+ma_uint32 buffer_size = 80;
 std::string filename_signature = "%Y %m %d %H %M %S";
 std::string record_path = "recordings";
 std::string audio_format = "wav";
@@ -64,7 +64,7 @@ int input_device = 0;
 int loopback_device = 0;
 ma_bool32 sound_events = MA_FALSE;
 ma_format buffer_format = ma_format_s16;
-const ma_uint32 periods = 0;
+const ma_uint32 periods = 256;
 user_config conf("fp.ini");
 static void WINAPI SendNotification(const std::wstring& message) {
 	CoInitialize(NULL);
