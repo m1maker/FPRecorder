@@ -21,6 +21,7 @@
 #include <locale>
 #include<mutex>
 #include <ole2.h>
+#include <shlobj_core.h>
 #include <tlhelp32.h>
 #include <UIAutomation.h>
 #include <Uiautomationcore.h>
@@ -780,6 +781,12 @@ ma_int32 APIENTRY WINAPI _stdcall MINIAUDIO_IMPLEMENTATION wWinMain(HINSTANCE hI
 			filename_signature = conf.read("filename-signature");
 			record_path = conf.read("record-path");
 			audio_format = conf.read("audio-format");
+			if (audio_format != "wav") {
+				if (!std::filesystem::exists("ffmpeg.exe")) {
+					alert(L"FPFFMPegInitializerError", L"Get exit code 0 failed for \"ffmpeg.exe\". Either it is not found, or use the wav format.", MB_ICONERROR);
+					exit(-5);
+				}
+			}
 			std::string ind = conf.read("input-device");
 			input_device = std::stoi(ind);
 			std::string oud = conf.read("loopback-device");
@@ -837,7 +844,12 @@ ma_int32 APIENTRY WINAPI _stdcall MINIAUDIO_IMPLEMENTATION wWinMain(HINSTANCE hI
 		conf.write("sample-format", string(ma_format_to_string(buffer_format)));
 		conf.save();
 	}
-	window = show_window(L"FPRecorder " + version);
+	if (IsUserAnAdmin() == TRUE) {
+		window = show_window(L"FPRecorder " + version + L"(Administrator)");
+	}
+	else {
+		window = show_window(L"FPRecorder " + version);
+	}
 	MA_ASSERT(window != 0);
 	g_KeyboardHook = SetWindowsHookEx(WH_KEYBOARD_LL, KeyboardProc, GetModuleHandle(NULL), 0);
 	main_items_construct();
