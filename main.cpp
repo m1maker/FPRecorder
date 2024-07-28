@@ -56,7 +56,7 @@ static bool _cdecl unicode_convert(const std::wstring& str, std::string& output)
 }
 ma_uint32 sample_rate = 44100;
 ma_uint32 channels = 2;
-ma_uint32 buffer_size = 256;
+ma_uint32 buffer_size = 20;
 std::string filename_signature = "%Y %m %d %H %M %S";
 std::string record_path = "recordings";
 std::string audio_format = "wav";
@@ -436,6 +436,10 @@ void recording_thread(ma_encoder* encoder) {
 			ma_uint64 frameCountOut = microphone_frames * 2;
 			ma_data_converter_process_pcm_frames__format_only(&g_Converter, result, &frameCountToProcess, pInputOut, &frameCountOut);
 			ma_encoder_write_pcm_frames(encoder, pInputOut, frameCountOut, nullptr);
+			microphone_frames = 0;
+			loopback_frames = 0;
+			microphone_buffer = nullptr;
+			loopback_buffer = nullptr;
 		}
 	}
 }
