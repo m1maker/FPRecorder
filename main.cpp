@@ -66,7 +66,7 @@ __declspec(allocate("CONFIG"))std::string record_path = "recordings";
 __declspec(allocate("CONFIG"))std::string audio_format = "wav";
 __declspec(allocate("CONFIG"))int input_device = 0;
 __declspec(allocate("CONFIG"))int loopback_device = 0;
-__declspec(allocate("CONFIG"))ma_bool32 sound_events = MA_FALSE;
+__declspec(allocate("CONFIG"))ma_bool32 sound_events = MA_TRUE;
 __declspec(allocate("CONFIG"))ma_format buffer_format = ma_format_s16;
 __declspec(allocate("CONFIG"))const ma_uint32 periods = 256;
 __declspec(allocate("CONFIG"))user_config conf("fp.ini");
@@ -912,9 +912,6 @@ ma_int32 _stdcall MINIAUDIO_IMPLEMENTATION wWinMain(HINSTANCE hInstance, HINSTAN
 	while (true) {
 		wait(5);
 		update_window(window);
-		if (hotkey_pressed(1)) {
-			Beep(500, 50);
-		}
 		if (gui::try_close) {
 			gui::try_close = false;
 			if (g_Recording) {
@@ -977,7 +974,7 @@ ma_int32 _stdcall MINIAUDIO_IMPLEMENTATION wWinMain(HINSTANCE hInstance, HINSTAN
 				ma_sound_seek_to_pcm_frame(&player, 0);
 				ma_sound_stop(&player);
 			}
-			if (key_pressed(VK_DELETE) or is_pressed(delete_button)) {
+			if (key_down(VK_DELETE) or is_pressed(delete_button)) {
 				if (get_focused_list_item_name(items_view_list) == L"")continue;
 				wait(10);
 				int result = alert(L"FPWarning", L"Are you sure you want to delete the recording \"" + get_focused_list_item_name(items_view_list) + L"\"? It can no longer be restored.", MB_YESNO | MB_ICONEXCLAMATION);
@@ -997,7 +994,7 @@ ma_int32 _stdcall MINIAUDIO_IMPLEMENTATION wWinMain(HINSTANCE hInstance, HINSTAN
 				}
 			}
 		}
-		if (is_pressed(record_start) and !g_Recording) {
+		if (!g_Recording && (is_pressed(record_start) || hotkey_pressed(HOTKEY_STARTSTOP))) {
 			loopback_device = get_list_position(output_devices_list);
 			input_device = get_list_position(input_devices_list);
 			conf.write("input-device", std::to_string(input_device));
@@ -1025,7 +1022,7 @@ ma_int32 _stdcall MINIAUDIO_IMPLEMENTATION wWinMain(HINSTANCE hInstance, HINSTAN
 			g_Recording = true;
 			g_RecordingPaused = false;
 		}
-		if (is_pressed(record_stop) and g_Recording) {
+		if (g_Recording && (is_pressed(record_stop) || hotkey_pressed(HOTKEY_STARTSTOP))) {
 			rec.stop();
 			if (sound_events == MA_TRUE)play_from_memory(Stop_wav, 6533);
 			g_Recording = false;
@@ -1053,7 +1050,7 @@ ma_int32 _stdcall MINIAUDIO_IMPLEMENTATION wWinMain(HINSTANCE hInstance, HINSTAN
 			}
 			main_items_construct();
 		}
-		if (is_pressed(record_pause) and g_Recording) {
+		if (g_Recording && (is_pressed(record_pause) || hotkey_pressed(HOTKEY_PAUSERESUME))) {
 			if (!g_RecordingPaused) {
 				rec.pause();
 				if (sound_events == MA_TRUE)play_from_memory(Pause_wav, 9545);
@@ -1068,7 +1065,7 @@ ma_int32 _stdcall MINIAUDIO_IMPLEMENTATION wWinMain(HINSTANCE hInstance, HINSTAN
 			}
 			ma_sleep(100);
 		}
-		if (is_pressed(record_restart) and g_Recording) {
+		if (g_Recording && (is_pressed(record_restart) || hotkey_pressed(HOTKEY_RESTART))) {
 			wait(10);
 			std::wstring recording_name_u;
 			unicode_convert(rec.filename, recording_name_u);
