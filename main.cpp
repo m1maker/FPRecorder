@@ -80,8 +80,12 @@ static bool _cdecl replace(std::string& str, const std::string& from, const std:
 
 	return replaced; // Return true if any replacement was made
 }
-
-
+struct preset {
+	std::string name;
+	std::string command;
+};
+preset g_CurrentPreset;
+std::vector<preset> presets;
 __declspec(allocate("CONFIG"))ma_uint32 sample_rate = 44100;
 __declspec(allocate("CONFIG"))ma_uint32 channels = 2;
 __declspec(allocate("CONFIG"))ma_uint32 buffer_size = 0;
@@ -97,6 +101,8 @@ __declspec(allocate("CONFIG"))user_config conf("fp.ini");
 __declspec(allocate("CONFIG")) std::string hotkey_start_stop = "Windows+Shift+F1";
 __declspec(allocate("CONFIG"))std::string hotkey_pause_resume = "Windows+Shift+F2";
 __declspec(allocate("CONFIG"))std::string hotkey_restart = "Windows+Shift+F3";
+__declspec(allocate("CONFIG"))const preset g_DefaultPreset = { "Default", "ffmpeg.exe -i %I %i.%f" };
+__declspec(allocate("CONFIG"))std::string current_preset_name = "Default";
 static void WINAPI SendNotification(const std::wstring& message) {
 	CoInitialize(NULL);
 
@@ -882,6 +888,30 @@ ma_int32 _stdcall MINIAUDIO_IMPLEMENTATION wWinMain(HINSTANCE hInstance, HINSTAN
 				throw std::exception("Invalid hotkey");
 			}
 			RegisterHotKey(nullptr, HOTKEY_RESTART, kmod, kcode);
+			std::vector<std::string> presets_str = conf.get_keys("Presets");
+			if (presets_str.size() > 0) {
+				presets.clear();
+				for (unsigned int i = 0; i < presets_str.size(); i++) {
+					preset p;
+					p.name = presets_str[i];
+					p.command = conf.read("Presets", presets_str[i]);
+					presets.push_back(p);
+				}
+			}
+			current_preset_name = conf.read("General", "current-preset");
+			bool preset_found = false;
+			unsigned int it;
+			for (it = 0; it < presets.size(); it++) {
+				if (current_preset_name == presets[it].name) {
+					preset_found = true;
+					break;
+				}
+			}
+			if (!preset_found) {
+				throw std::exception("Invalid preset name");
+			}
+			g_CurrentPreset.name = presets[it].name;
+			g_CurrentPreset.command = presets[it].command;
 		}
 		catch (const std::exception& e) {
 			std::string what = e.what();
@@ -929,6 +959,8 @@ ma_int32 _stdcall MINIAUDIO_IMPLEMENTATION wWinMain(HINSTANCE hInstance, HINSTAN
 		conf.write("General", "hotkey-start-stop", hotkey_start_stop);
 		conf.write("General", "hotkey-pause-resume", hotkey_pause_resume);
 		conf.write("General", "hotkey-restart", hotkey_restart);
+		conf.write("Presets", g_DefaultPreset.name, g_DefaultPreset.command);
+		conf.write("General", "current-preset", g_DefaultPreset.name);
 		conf.save();
 		hotkey_start_stop = conf.read("General", "hotkey-start-stop");
 		if (parse_hotkey(hotkey_start_stop, kmod, kcode) == false) {
@@ -945,6 +977,7 @@ ma_int32 _stdcall MINIAUDIO_IMPLEMENTATION wWinMain(HINSTANCE hInstance, HINSTAN
 			throw std::exception("Invalid hotkey");
 		}
 		RegisterHotKey(nullptr, HOTKEY_RESTART, kmod, kcode);
+		g_CurrentPreset = g_DefaultPreset;
 	}
 	if (IsUserAnAdmin() == TRUE) {
 		window = show_window(L"FPRecorder " + version + L"(Administrator)");
@@ -955,6 +988,7 @@ ma_int32 _stdcall MINIAUDIO_IMPLEMENTATION wWinMain(HINSTANCE hInstance, HINSTAN
 	MA_ASSERT(window != 0);
 	g_KeyboardHook = SetWindowsHookEx(WH_KEYBOARD_LL, KeyboardProc, GetModuleHandle(NULL), 0);
 	main_items_construct();
+	presets.push_back(g_DefaultPreset);
 	while (true) {
 		wait(5);
 		update_window(window);
@@ -1088,7 +1122,11 @@ ma_int32 _stdcall MINIAUDIO_IMPLEMENTATION wWinMain(HINSTANCE hInstance, HINSTAN
 				string output;
 				std::vector<std::string> split = string_split(".wav", rec.filename);
 				SendNotification(L"Converting...");
-				int result = ExecSystemCmd("ffmpeg.exe -i \"" + rec.filename + "\" \"" + split[0] + "." + audio_format + "\"", output);
+				std::string cmd = g_CurrentPreset.command;
+				replace(cmd, "%I", "\"" + rec.filename + "\"", true);
+				replace(cmd, "%i", "\"" + split[0] + "\"", true);
+				replace(cmd, "%f", audio_format, true);
+				int result = ExecSystemCmd(cmd, output);
 				if (result != 0) {
 					if (sound_events == MA_TRUE)play_from_memory(Error_wav, 15499, false);
 					wstring output_u;
