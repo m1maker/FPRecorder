@@ -42,7 +42,7 @@ using namespace Microsoft::WRL;
 const int HOTKEY_STARTSTOP = 1;
 const int HOTKEY_PAUSERESUME = 2;
 const int HOTKEY_RESTART = 3;
-bool _cdecl unicode_convert(const std::string& str, std::wstring& output) {
+static bool _cdecl unicode_convert(const std::string& str, std::wstring& output) {
 	std::wstring_convert<std::codecvt_utf8_utf16<wchar_t>> converter;
 	try {
 		output = converter.from_bytes(str);
@@ -58,6 +58,30 @@ static bool _cdecl unicode_convert(const std::wstring& str, std::string& output)
 	catch (const std::exception& e) { return false; }
 	return true;
 }
+static bool _cdecl replace(std::string& str, const std::string& from, const std::string& to, bool replace_all) {
+	if (from.empty()) {
+		return false; // Nothing to replace
+	}
+
+	size_t start_pos = 0;
+	bool replaced = false;
+
+	// Loop until no more occurrences are found
+	while ((start_pos = str.find(from, start_pos)) != std::string::npos) {
+		str.replace(start_pos, from.length(), to);
+		start_pos += to.length(); // Move past the replaced part
+		replaced = true;
+
+		// If not replacing all, break after the first replacement
+		if (!replace_all) {
+			break;
+		}
+	}
+
+	return replaced; // Return true if any replacement was made
+}
+
+
 __declspec(allocate("CONFIG"))ma_uint32 sample_rate = 44100;
 __declspec(allocate("CONFIG"))ma_uint32 channels = 2;
 __declspec(allocate("CONFIG"))ma_uint32 buffer_size = 0;
