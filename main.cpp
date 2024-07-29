@@ -716,7 +716,7 @@ void main_items_construct() {
 
 	input_devices_list = create_list(window, 10, 90, 200, 150, 0);
 	items.push_back(input_devices_list);
-	add_list_item(input_devices_list, L"0(Default)");
+	add_list_item(input_devices_list, L"Default");
 	in_audio_devices = get_input_audio_devices();
 	for (unsigned int i = 0; i < in_audio_devices.size(); i++) {
 		add_list_item(input_devices_list, in_audio_devices[i].name.c_str());
@@ -728,7 +728,7 @@ void main_items_construct() {
 
 	output_devices_list = create_list(window, 10, 270, 200, 150, 0);
 	items.push_back(output_devices_list);
-	add_list_item(output_devices_list, L"0(Not used)");
+	add_list_item(output_devices_list, L"Not used");
 	out_audio_devices = get_output_audio_devices();
 	for (unsigned int i = 0; i < out_audio_devices.size(); i++) {
 		add_list_item(output_devices_list, out_audio_devices[i].name.c_str());
@@ -816,15 +816,15 @@ ma_int32 _stdcall MINIAUDIO_IMPLEMENTATION wWinMain(HINSTANCE hInstance, HINSTAN
 	int result = conf.load();
 	if (result == EXIT_SUCCESS) {
 		try {
-			std::string srate = conf.read("sample-rate");
+			std::string srate = conf.read("General", "sample-rate");
 			sample_rate = std::stoi(srate);
-			std::string chann = conf.read("channels");
+			std::string chann = conf.read("General", "channels");
 			channels = std::stoi(chann);
-			std::string bs = conf.read("buffer-size");
+			std::string bs = conf.read("General", "buffer-size");
 			buffer_size = std::stoi(bs);
-			filename_signature = conf.read("filename-signature");
-			record_path = conf.read("record-path");
-			audio_format = conf.read("audio-format");
+			filename_signature = conf.read("General", "filename-signature");
+			record_path = conf.read("General", "record-path");
+			audio_format = conf.read("General", "audio-format");
 			if (audio_format != "wav") {
 				std::string output;
 				if (ExecSystemCmd("ffmpeg.exe -h", output) != 0) {
@@ -832,28 +832,28 @@ ma_int32 _stdcall MINIAUDIO_IMPLEMENTATION wWinMain(HINSTANCE hInstance, HINSTAN
 					exit(-5);
 				}
 			}
-			std::string ind = conf.read("input-device");
+			std::string ind = conf.read("General", "input-device");
 			input_device = std::stoi(ind);
-			std::string oud = conf.read("loopback-device");
+			std::string oud = conf.read("General", "loopback-device");
 			loopback_device = std::stoi(oud);
-			std::string sevents = conf.read("sound-events");
+			std::string sevents = conf.read("General", "sound-events");
 			sound_events = std::stoi(sevents);
-			std::string sformat = conf.read("sample-format");
+			std::string sformat = conf.read("General", "sample-format");
 			ma_bool32 parse_result = try_parse_format(sformat.c_str(), &buffer_format);
 			if (parse_result == MA_FALSE) {
 				throw std::exception("Invalid sample format parameter");
 			}
-			hotkey_start_stop = conf.read("hotkey-start-stop");
+			hotkey_start_stop = conf.read("General", "hotkey-start-stop");
 			if (parse_hotkey(hotkey_start_stop, kmod, kcode) == false) {
 				throw std::exception("Invalid hotkey");
 			}
 			RegisterHotKey(nullptr, HOTKEY_STARTSTOP, kmod, kcode);
-			hotkey_pause_resume = conf.read("hotkey-pause-resume");
+			hotkey_pause_resume = conf.read("General", "hotkey-pause-resume");
 			if (parse_hotkey(hotkey_pause_resume, kmod, kcode) == false) {
 				throw std::exception("Invalid hotkey");
 			}
 			RegisterHotKey(nullptr, HOTKEY_PAUSERESUME, kmod, kcode);
-			hotkey_restart = conf.read("hotkey-restart");
+			hotkey_restart = conf.read("General", "hotkey-restart");
 			if (parse_hotkey(hotkey_restart, kmod, kcode) == false) {
 				throw std::exception("Invalid hotkey");
 			}
@@ -892,31 +892,31 @@ ma_int32 _stdcall MINIAUDIO_IMPLEMENTATION wWinMain(HINSTANCE hInstance, HINSTAN
 		}
 
 
-		conf.write("sample-rate", std::to_string(sample_rate));
-		conf.write("channels", std::to_string(channels));
-		conf.write("buffer-size", std::to_string(buffer_size));
-		conf.write("filename-signature", filename_signature);
-		conf.write("record-path", record_path);
-		conf.write("audio-format", audio_format);
-		conf.write("input-device", std::to_string(input_device));
-		conf.write("loopback-device", std::to_string(loopback_device));
-		conf.write("sound-events", std::to_string(sound_events));
-		conf.write("sample-format", string(ma_format_to_string(buffer_format)));
-		conf.write("hotkey-start-stop", hotkey_start_stop);
-		conf.write("hotkey-pause-resume", hotkey_pause_resume);
-		conf.write("hotkey-restart", hotkey_restart);
+		conf.write("General", "sample-rate", std::to_string(sample_rate));
+		conf.write("General", "channels", std::to_string(channels));
+		conf.write("General", "buffer-size", std::to_string(buffer_size));
+		conf.write("General", "filename-signature", filename_signature);
+		conf.write("General", "record-path", record_path);
+		conf.write("General", "audio-format", audio_format);
+		conf.write("General", "input-device", std::to_string(input_device));
+		conf.write("General", "loopback-device", std::to_string(loopback_device));
+		conf.write("General", "sound-events", std::to_string(sound_events));
+		conf.write("General", "sample-format", string(ma_format_to_string(buffer_format)));
+		conf.write("General", "hotkey-start-stop", hotkey_start_stop);
+		conf.write("General", "hotkey-pause-resume", hotkey_pause_resume);
+		conf.write("General", "hotkey-restart", hotkey_restart);
 		conf.save();
-		hotkey_start_stop = conf.read("hotkey-start-stop");
+		hotkey_start_stop = conf.read("General", "hotkey-start-stop");
 		if (parse_hotkey(hotkey_start_stop, kmod, kcode) == false) {
 			throw std::exception("Invalid hotkey");
 		}
 		RegisterHotKey(nullptr, HOTKEY_STARTSTOP, kmod, kcode);
-		hotkey_pause_resume = conf.read("hotkey-pause-resume");
+		hotkey_pause_resume = conf.read("General", "hotkey-pause-resume");
 		if (parse_hotkey(hotkey_pause_resume, kmod, kcode) == false) {
 			throw std::exception("Invalid hotkey");
 		}
 		RegisterHotKey(nullptr, HOTKEY_PAUSERESUME, kmod, kcode);
-		hotkey_restart = conf.read("hotkey-restart");
+		hotkey_restart = conf.read("General", "hotkey-restart");
 		if (parse_hotkey(hotkey_restart, kmod, kcode) == false) {
 			throw std::exception("Invalid hotkey");
 		}
@@ -955,8 +955,8 @@ ma_int32 _stdcall MINIAUDIO_IMPLEMENTATION wWinMain(HINSTANCE hInstance, HINSTAN
 		if (is_pressed(record_manager) and !g_RecordingsManager) {
 			loopback_device = get_list_position(output_devices_list);
 			input_device = get_list_position(input_devices_list);
-			conf.write("input-device", std::to_string(input_device));
-			conf.write("loopback-device", std::to_string(loopback_device));
+			conf.write("General", "input-device", std::to_string(input_device));
+			conf.write("General", "loopback-device", std::to_string(loopback_device));
 			conf.save();
 			window_reset();
 			record_manager_items_construct();
@@ -1024,8 +1024,8 @@ ma_int32 _stdcall MINIAUDIO_IMPLEMENTATION wWinMain(HINSTANCE hInstance, HINSTAN
 		if (!g_Recording && (is_pressed(record_start) || hotkey_pressed(HOTKEY_STARTSTOP))) {
 			loopback_device = get_list_position(output_devices_list);
 			input_device = get_list_position(input_devices_list);
-			conf.write("input-device", std::to_string(input_device));
-			conf.write("loopback-device", std::to_string(loopback_device));
+			conf.write("General", "input-device", std::to_string(input_device));
+			conf.write("General", "loopback-device", std::to_string(loopback_device));
 			conf.save();
 			if (sound_events == MA_TRUE)play_from_memory(Start_wav, 6523);
 			std::wstring in_device_name = get_focused_list_item_name(input_devices_list);

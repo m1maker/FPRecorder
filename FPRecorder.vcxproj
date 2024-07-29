@@ -140,6 +140,7 @@
   <ItemGroup>
     <ClInclude Include="Error.wav.h" />
     <ClInclude Include="gui.h" />
+    <ClInclude Include="inipp.h" />
     <ClInclude Include="miniaudio.h" />
     <ClInclude Include="Openmanager.wav.h" />
     <ClInclude Include="Pause.wav.h" />
