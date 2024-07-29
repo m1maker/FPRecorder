@@ -270,7 +270,7 @@ bool MA_API play(std::string filename) {
 	unicode_convert(filename, filename_u);
 	return play(filename_u);
 }
-bool MA_API play_from_memory(const unsigned char data[], size_t data_size = 0) {
+bool MA_API play_from_memory(const unsigned char data[], size_t data_size = 0, bool wait = true) {
 	if (&g_Decoder != nullptr)ma_decoder_uninit(&g_Decoder);
 	if (!g_EngineActive) {
 		if (ma_engine_init(nullptr, &mixer) == MA_SUCCESS)g_EngineActive = true;
@@ -284,6 +284,11 @@ bool MA_API play_from_memory(const unsigned char data[], size_t data_size = 0) {
 		ma_result result = ma_sound_init_from_data_source(&mixer, &g_Decoder, MA_SOUND_FLAG_NO_SPATIALIZATION, nullptr, &player);
 		if (result == MA_SUCCESS)g_SoundActive = true;
 		if (result == MA_SUCCESS)ma_sound_start(&player);
+		if (wait) {
+			while (ma_sound_is_playing(&player) == MA_TRUE) {
+				gui::wait(5);
+			}
+		}
 		return result == MA_SUCCESS;
 	}
 	return false;
@@ -525,7 +530,7 @@ public:
 		if (result != MA_SUCCESS) {
 			std::wstring file_u;
 			unicode_convert(file, file_u);
-			if (sound_events == MA_TRUE)		play_from_memory(Error_wav, 15499);
+			if (sound_events == MA_TRUE)		play_from_memory(Error_wav, 15499, false);
 			alert(L"FPEncoderInitializerError", L"Error initializing audio encoder for file \"" + file_u + L"\" with retcode " + std::to_wstring(result) + L".", MB_ICONERROR);
 			exit(result);
 		}
@@ -541,7 +546,7 @@ public:
 		deviceConfig.pUserData = &encoder;
 		result = ma_device_init(NULL, &deviceConfig, &recording_device);
 		if (result != MA_SUCCESS) {
-			if (sound_events == MA_TRUE)		play_from_memory(Error_wav, 15499);
+			if (sound_events == MA_TRUE)		play_from_memory(Error_wav, 15499, false);
 			alert(L"FPAudioDeviceInitializerError", L"Error initializing audio device for \"" + g_CurrentInputDevice.name + L"\" with retcode " + std::to_wstring(result) + L".", MB_ICONERROR);
 			exit(result);
 		}
@@ -563,7 +568,7 @@ public:
 
 			result = ma_device_init_ex(backends, sizeof(backends) / sizeof(backends[0]), NULL, &loopbackDeviceConfig, &loopback_device);
 			if (result != MA_SUCCESS) {
-				if (sound_events == MA_TRUE)		play_from_memory(Error_wav, 15499);
+				if (sound_events == MA_TRUE)		play_from_memory(Error_wav, 15499, false);
 				alert(L"FPAudioDeviceInitializerError", L"Error initializing audio device for \"" + g_CurrentOutputDevice.name + L"\" with retcode " + std::to_wstring(result) + L".", MB_ICONERROR);
 				exit(result);
 			}
@@ -799,17 +804,16 @@ std::wstring WINAPI get_exe() {
 	return std::wstring(pathBuf.begin(), pathBuf.end());
 }
 ma_int32 _stdcall MINIAUDIO_IMPLEMENTATION wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, wchar_t* lpCmdLine, ma_int32       nShowCmd) {
+	DWORD kmod;
+	int kcode;
 	if (wcslen(lpCmdLine) != 0) {
 		MessageBeep(MB_ICONERROR);
 		play_from_memory(Error_wav, 15499);
-		ma_sleep(1000);
 		return MA_ERROR;
 	}
 	int result = conf.load();
 	if (result == EXIT_SUCCESS) {
 		try {
-			DWORD kmod;
-			int kcode;
 			std::string srate = conf.read("sample-rate");
 			sample_rate = std::stoi(srate);
 			std::string chann = conf.read("channels");
@@ -899,6 +903,21 @@ ma_int32 _stdcall MINIAUDIO_IMPLEMENTATION wWinMain(HINSTANCE hInstance, HINSTAN
 		conf.write("hotkey-pause-resume", hotkey_pause_resume);
 		conf.write("hotkey-restart", hotkey_restart);
 		conf.save();
+		hotkey_start_stop = conf.read("hotkey-start-stop");
+		if (parse_hotkey(hotkey_start_stop, kmod, kcode) == false) {
+			throw std::exception("Invalid hotkey");
+		}
+		RegisterHotKey(nullptr, HOTKEY_STARTSTOP, kmod, kcode);
+		hotkey_pause_resume = conf.read("hotkey-pause-resume");
+		if (parse_hotkey(hotkey_pause_resume, kmod, kcode) == false) {
+			throw std::exception("Invalid hotkey");
+		}
+		RegisterHotKey(nullptr, HOTKEY_PAUSERESUME, kmod, kcode);
+		hotkey_restart = conf.read("hotkey-restart");
+		if (parse_hotkey(hotkey_restart, kmod, kcode) == false) {
+			throw std::exception("Invalid hotkey");
+		}
+		RegisterHotKey(nullptr, HOTKEY_RESTART, kmod, kcode);
 	}
 	if (IsUserAnAdmin() == TRUE) {
 		window = show_window(L"FPRecorder " + version + L"(Administrator)");
@@ -915,7 +934,7 @@ ma_int32 _stdcall MINIAUDIO_IMPLEMENTATION wWinMain(HINSTANCE hInstance, HINSTAN
 		if (gui::try_close) {
 			gui::try_close = false;
 			if (g_Recording) {
-				if (sound_events == MA_TRUE)		play_from_memory(Error_wav, 15499);
+				if (sound_events == MA_TRUE)		play_from_memory(Error_wav, 15499, false);
 				SendNotification(L"Unable to exit, while recording.");
 				continue;
 			}
@@ -952,7 +971,7 @@ ma_int32 _stdcall MINIAUDIO_IMPLEMENTATION wWinMain(HINSTANCE hInstance, HINSTAN
 			unicode_convert(record_path, record_path_u);
 			std::vector<wstring> files = get_files(record_path_u);
 			if (files.size() == 0) {
-				if (sound_events == MA_TRUE)		play_from_memory(Error_wav, 15499);
+				if (sound_events == MA_TRUE)		play_from_memory(Error_wav, 15499, false);
 				SendNotification(L"There are no files in \"" + record_path_u + L"\".");
 				window_reset();
 				main_items_construct();
@@ -974,7 +993,7 @@ ma_int32 _stdcall MINIAUDIO_IMPLEMENTATION wWinMain(HINSTANCE hInstance, HINSTAN
 				ma_sound_seek_to_pcm_frame(&player, 0);
 				ma_sound_stop(&player);
 			}
-			if (key_down(VK_DELETE) or is_pressed(delete_button)) {
+			if (key_pressed(VK_DELETE) or is_pressed(delete_button)) {
 				if (get_focused_list_item_name(items_view_list) == L"")continue;
 				wait(10);
 				int result = alert(L"FPWarning", L"Are you sure you want to delete the recording \"" + get_focused_list_item_name(items_view_list) + L"\"? It can no longer be restored.", MB_YESNO | MB_ICONEXCLAMATION);
@@ -1039,7 +1058,7 @@ ma_int32 _stdcall MINIAUDIO_IMPLEMENTATION wWinMain(HINSTANCE hInstance, HINSTAN
 				SendNotification(L"Converting...");
 				int result = ExecSystemCmd("ffmpeg.exe -i \"" + rec.filename + "\" \"" + split[0] + "." + audio_format + "\"", output);
 				if (result != 0) {
-					if (sound_events == MA_TRUE)play_from_memory(Error_wav, 15499);
+					if (sound_events == MA_TRUE)play_from_memory(Error_wav, 15499, false);
 					wstring output_u;
 					unicode_convert(output, output_u);
 					alert(L"FPError", L"Process exit failure!\nRetcode: " + std::to_wstring(result) + L"\nOutput: \"" + output_u + L"\".", MB_ICONERROR);
