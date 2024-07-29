@@ -824,7 +824,8 @@ ma_int32 _stdcall MINIAUDIO_IMPLEMENTATION wWinMain(HINSTANCE hInstance, HINSTAN
 			record_path = conf.read("record-path");
 			audio_format = conf.read("audio-format");
 			if (audio_format != "wav") {
-				if (!std::filesystem::exists("ffmpeg.exe")) {
+				std::string output;
+				if (ExecSystemCmd("ffmpeg.exe -h", output) != 0) {
 					alert(L"FPFFMPegInitializerError", L"Get exit code 0 failed for \"ffmpeg.exe\". Either it is not found, or use the wav format.", MB_ICONERROR);
 					exit(-5);
 				}
