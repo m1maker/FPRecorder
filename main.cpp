@@ -39,6 +39,9 @@
 #include <vector>
 using namespace gui;
 using namespace Microsoft::WRL;
+const int HOTKEY_STARTSTOP = 1;
+const int HOTKEY_PAUSERESUME = 2;
+const int HOTKEY_RESTART = 3;
 bool _cdecl unicode_convert(const std::string& str, std::wstring& output) {
 	std::wstring_convert<std::codecvt_utf8_utf16<wchar_t>> converter;
 	try {
@@ -67,6 +70,9 @@ __declspec(allocate("CONFIG"))ma_bool32 sound_events = MA_FALSE;
 __declspec(allocate("CONFIG"))ma_format buffer_format = ma_format_s16;
 __declspec(allocate("CONFIG"))const ma_uint32 periods = 256;
 __declspec(allocate("CONFIG"))user_config conf("fp.ini");
+__declspec(allocate("CONFIG")) std::string hotkey_start_stop = "Windows+Shift+F1";
+__declspec(allocate("CONFIG"))std::string hotkey_pause_resume = "Windows+Shift+F2";
+__declspec(allocate("CONFIG"))std::string hotkey_restart = "Windows+Shift+F3";
 static void WINAPI SendNotification(const std::wstring& message) {
 	CoInitialize(NULL);
 
@@ -83,7 +89,7 @@ static void WINAPI SendNotification(const std::wstring& message) {
 		if (SUCCEEDED(hr)) {
 			Provider* pProvider = new Provider(GetForegroundWindow());
 			IUIAutomationElement* pElement = NULL;
-			hr = pAutomation->ElementFromHandle(GetForegroundWindow(), &pElement);
+			hr = pAutomation->ElementFromHandle(GetDesktopWindow(), &pElement);
 
 			if (SUCCEEDED(hr)) {
 				hr = UiaRaiseNotificationEvent(pProvider, NotificationKind_ActionCompleted, NotificationProcessing_ImportantAll, SysAllocString(message.c_str()), SysAllocString(L""));
@@ -828,6 +834,10 @@ ma_int32 _stdcall MINIAUDIO_IMPLEMENTATION wWinMain(HINSTANCE hInstance, HINSTAN
 			if (parse_result == MA_FALSE) {
 				throw std::exception("Invalid sample format parameter");
 			}
+			hotkey_start_stop = conf.read("hotkey-start-stop");
+			DWORD kmod;
+			int kcode;
+			//			if (parse_hotkey()
 		}
 		catch (const std::exception& e) {
 			std::string what = e.what();
@@ -886,6 +896,9 @@ ma_int32 _stdcall MINIAUDIO_IMPLEMENTATION wWinMain(HINSTANCE hInstance, HINSTAN
 	while (true) {
 		wait(5);
 		update_window(window);
+		if (hotkey_pressed(1)) {
+			Beep(500, 50);
+		}
 		if (gui::try_close) {
 			gui::try_close = false;
 			if (g_Recording) {

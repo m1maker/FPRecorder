@@ -17,7 +17,9 @@ namespace gui {
 	bool key_released(int keyCode);
 	bool key_down(int keyCode);
 	int alert(std::wstring title, std::wstring text, int flags = 0);
+	bool parse_hotkey(const std::string& hotkeyStr, DWORD& modKeys, int& vkKey);
 	void wait(int time);
+	bool hotkey_pressed(int id);
 	class timer;
 	class timer {
 	public:
