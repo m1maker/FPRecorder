@@ -808,6 +808,8 @@ ma_int32 _stdcall MINIAUDIO_IMPLEMENTATION wWinMain(HINSTANCE hInstance, HINSTAN
 	int result = conf.load();
 	if (result == EXIT_SUCCESS) {
 		try {
+			DWORD kmod;
+			int kcode;
 			std::string srate = conf.read("sample-rate");
 			sample_rate = std::stoi(srate);
 			std::string chann = conf.read("channels");
@@ -835,9 +837,20 @@ ma_int32 _stdcall MINIAUDIO_IMPLEMENTATION wWinMain(HINSTANCE hInstance, HINSTAN
 				throw std::exception("Invalid sample format parameter");
 			}
 			hotkey_start_stop = conf.read("hotkey-start-stop");
-			DWORD kmod;
-			int kcode;
-			//			if (parse_hotkey()
+			if (parse_hotkey(hotkey_start_stop, kmod, kcode) == false) {
+				throw std::exception("Invalid hotkey");
+			}
+			RegisterHotKey(nullptr, HOTKEY_STARTSTOP, kmod, kcode);
+			hotkey_pause_resume = conf.read("hotkey-pause-resume");
+			if (parse_hotkey(hotkey_pause_resume, kmod, kcode) == false) {
+				throw std::exception("Invalid hotkey");
+			}
+			RegisterHotKey(nullptr, HOTKEY_PAUSERESUME, kmod, kcode);
+			hotkey_restart = conf.read("hotkey-restart");
+			if (parse_hotkey(hotkey_restart, kmod, kcode) == false) {
+				throw std::exception("Invalid hotkey");
+			}
+			RegisterHotKey(nullptr, HOTKEY_RESTART, kmod, kcode);
 		}
 		catch (const std::exception& e) {
 			std::string what = e.what();
@@ -882,6 +895,9 @@ ma_int32 _stdcall MINIAUDIO_IMPLEMENTATION wWinMain(HINSTANCE hInstance, HINSTAN
 		conf.write("loopback-device", std::to_string(loopback_device));
 		conf.write("sound-events", std::to_string(sound_events));
 		conf.write("sample-format", string(ma_format_to_string(buffer_format)));
+		conf.write("hotkey-start-stop", hotkey_start_stop);
+		conf.write("hotkey-pause-resume", hotkey_pause_resume);
+		conf.write("hotkey-restart", hotkey_restart);
 		conf.save();
 	}
 	if (IsUserAnAdmin() == TRUE) {
@@ -907,6 +923,9 @@ ma_int32 _stdcall MINIAUDIO_IMPLEMENTATION wWinMain(HINSTANCE hInstance, HINSTAN
 				continue;
 			}
 			UnhookWindowsHookEx(g_KeyboardHook);
+			UnregisterHotKey(nullptr, HOTKEY_STARTSTOP);
+			UnregisterHotKey(nullptr, HOTKEY_PAUSERESUME);
+			UnregisterHotKey(nullptr, HOTKEY_RESTART);
 			exit(0);
 		}
 		if (is_pressed(record_manager) and !g_RecordingsManager) {
