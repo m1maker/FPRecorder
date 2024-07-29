@@ -57,7 +57,7 @@ static bool _cdecl unicode_convert(const std::wstring& str, std::string& output)
 }
 __declspec(allocate("CONFIG"))ma_uint32 sample_rate = 44100;
 __declspec(allocate("CONFIG"))ma_uint32 channels = 2;
-__declspec(allocate("CONFIG"))ma_uint32 buffer_size = 80;
+__declspec(allocate("CONFIG"))ma_uint32 buffer_size = 0;
 __declspec(allocate("CONFIG"))std::string filename_signature = "%Y %m %d %H %M %S";
 __declspec(allocate("CONFIG"))std::string record_path = "recordings";
 __declspec(allocate("CONFIG"))std::string audio_format = "wav";
