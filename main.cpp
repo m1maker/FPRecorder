@@ -553,12 +553,15 @@ public:
 		ma_device_start(&recording_device);
 		if (g_CurrentOutputDevice.name != L"NO") {
 			loopbackDeviceConfig = ma_device_config_init(ma_device_type_loopback);
-			loopbackDeviceConfig.capture.pDeviceID = &g_CurrentOutputDevice.id;
+			loopbackDeviceConfig.capture.pDeviceID = &g_CurrentOutputDevice.id;;
 			loopbackDeviceConfig.capture.format = ma_format_f32;
 			loopbackDeviceConfig.capture.channels = channels;
+			application app;
+			std::vector<application> apps = get_tasklist();;
+			for (unsigned int i = 0; i < apps.size(); i++) {
+			}
 			loopbackDeviceConfig.sampleRate = sample_rate;
 			loopbackDeviceConfig.periodSizeInMilliseconds = buffer_size;
-			loopbackDeviceConfig.periods = periods;
 			loopbackDeviceConfig.dataCallback = audio_recorder_callback_loopback;
 			loopbackDeviceConfig.pUserData = nullptr;
 			ma_backend backends[] = {
@@ -566,8 +569,7 @@ public:
 			};
 
 
-			result = ma_device_init_ex(backends, sizeof(backends) / sizeof(backends[0]), NULL, &loopbackDeviceConfig, &loopback_device);
-			if (result != MA_SUCCESS) {
+			result = ma_device_init_ex(backends, sizeof(backends) / sizeof(backends[0]), NULL, &loopbackDeviceConfig, &loopback_device);			if (result != MA_SUCCESS) {
 				if (sound_events == MA_TRUE)		play_from_memory(Error_wav, 15499, false);
 				alert(L"FPAudioDeviceInitializerError", L"Error initializing audio device for \"" + g_CurrentOutputDevice.name + L"\" with retcode " + std::to_wstring(result) + L".", MB_ICONERROR);
 				exit(result);
