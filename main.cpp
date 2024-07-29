@@ -932,6 +932,11 @@ ma_int32 _stdcall MINIAUDIO_IMPLEMENTATION wWinMain(HINSTANCE hInstance, HINSTAN
 	while (true) {
 		wait(5);
 		update_window(window);
+		// Avoid invalid hotkey presses not in recording mode.
+		if (!g_Recording) {
+			hotkey_pressed(HOTKEY_PAUSERESUME);
+			hotkey_pressed(HOTKEY_RESTART);
+		}
 		if (gui::try_close) {
 			gui::try_close = false;
 			if (g_Recording) {
