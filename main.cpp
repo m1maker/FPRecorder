@@ -6,7 +6,7 @@
 #include "Openmanager.wav.h"
 #include "Pause.wav.h"
 #include "Provider.h"
-#include "readme.h"
+#include "readmeH.h"
 #include "resource1.h"
 #include "Restart.wav.h"
 #include "start.wav.h"
