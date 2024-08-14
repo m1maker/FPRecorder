@@ -2,7 +2,7 @@
 #define _SILENCE_ALL_CXX17_DEPRECATION_WARNINGS
 #define _CRT_SECURE_NO_WARNINGS
 #include "Error.wav.h"
-#include "gui.h"
+#include "gui/gui.h"
 #include "Openmanager.wav.h"
 #include "Pause.wav.h"
 #include "Provider.h"

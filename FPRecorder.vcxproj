@@ -132,14 +132,14 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
-    <ClCompile Include="gui.cpp" />
+    <ClCompile Include="GUI\gui.cpp" />
     <ClCompile Include="main.cpp" />
     <ClCompile Include="Provider.cpp" />
     <ClCompile Include="stb_vorbis.c" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="Error.wav.h" />
-    <ClInclude Include="gui.h" />
+    <ClInclude Include="GUI\gui.h" />
     <ClInclude Include="inipp.h" />
     <ClInclude Include="miniaudio.h" />
     <ClInclude Include="Openmanager.wav.h" />
