@@ -19,11 +19,10 @@
     <ClInclude Include="user_config.h" />
     <ClInclude Include="Provider.h" />
     <ClInclude Include="stdafx.h" />
-    <ClInclude Include="readme.h" />
     <ClInclude Include="resource.h" />
     <ClInclude Include="resource1.h" />
-    <ClInclude Include="inipp.h" />
     <ClInclude Include="GUI\gui.h" />
+    <ClInclude Include="readmeH.h" />
   </ItemGroup>
   <ItemGroup>
     <ResourceCompile Include="FPRecorder.rc" />

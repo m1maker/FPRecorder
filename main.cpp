@@ -16,6 +16,7 @@
 #include "user_config.h"
 #include<assert.h>
 #include <codecvt>
+#include<comdef.h>
 #include<condition_variable>
 #include <deque>
 #include<filesystem>
@@ -26,6 +27,7 @@
 #include <tlhelp32.h>
 #include <UIAutomation.h>
 #include <Uiautomationcore.h>
+#define MA_NO_GENERATION
 #define MINIAUDIO_IMPLEMENTATION
 #include "miniaudio.h"
 #include <chrono>
@@ -37,27 +39,41 @@
 #include<sstream>
 #include<thread>
 #include <vector>
+
+
 using namespace gui;
-using namespace Microsoft::WRL;
 const int HOTKEY_STARTSTOP = 1;
 const int HOTKEY_PAUSERESUME = 2;
 const int HOTKEY_RESTART = 3;
-static bool _cdecl unicode_convert(const std::string& str, std::wstring& output) {
-	std::wstring_convert<std::codecvt_utf8_utf16<wchar_t>> converter;
-	try {
-		output = converter.from_bytes(str);
+
+
+
+static bool UnicodeConvert(const std::string& input, std::wstring& output) {
+	int size_needed = MultiByteToWideChar(CP_UTF8, 0, input.c_str(), -1, NULL, 0);
+	if (size_needed == 0) {
+		return false;
 	}
-	catch (const std::exception& e) { return false; }
+	std::vector<wchar_t> wide_string(size_needed);
+	if (MultiByteToWideChar(CP_UTF8, 0, input.c_str(), -1, &wide_string[0], size_needed) == 0) {
+		return false;
+	}
+	output.assign(wide_string.begin(), wide_string.end() - 1); // Remove null terminator
 	return true;
 }
-static bool _cdecl unicode_convert(const std::wstring& str, std::string& output) {
-	std::wstring_convert<std::codecvt_utf8_utf16<wchar_t>> converter;
-	try {
-		output = converter.to_bytes(str);
+
+static bool UnicodeConvert(const std::wstring& input, std::string& output) {
+	int size_needed = WideCharToMultiByte(CP_UTF8, 0, input.c_str(), -1, NULL, 0, NULL, NULL);
+	if (size_needed == 0) {
+		return false;
 	}
-	catch (const std::exception& e) { return false; }
+	std::vector<char> multi_byte_string(size_needed);
+	if (WideCharToMultiByte(CP_UTF8, 0, input.c_str(), -1, &multi_byte_string[0], size_needed, NULL, NULL) == 0) {
+		return false;
+	}
+	output.assign(multi_byte_string.begin(), multi_byte_string.end() - 1); // Remove null terminator
 	return true;
 }
+
 static bool _cdecl replace(std::string& str, const std::string& from, const std::string& to, bool replace_all) {
 	if (from.empty()) {
 		return false; // Nothing to replace
@@ -80,12 +96,16 @@ static bool _cdecl replace(std::string& str, const std::string& from, const std:
 
 	return replaced; // Return true if any replacement was made
 }
+
+
 struct preset {
 	std::string name;
 	std::string command;
 };
 preset g_CurrentPreset;
 std::vector<preset> presets;
+
+
 __declspec(allocate("CONFIG"))ma_uint32 sample_rate = 44100;
 __declspec(allocate("CONFIG"))ma_uint32 channels = 2;
 __declspec(allocate("CONFIG"))ma_uint32 buffer_size = 0;
@@ -103,57 +123,76 @@ __declspec(allocate("CONFIG"))std::string hotkey_pause_resume = "Windows+Shift+F
 __declspec(allocate("CONFIG"))std::string hotkey_restart = "Windows+Shift+F3";
 __declspec(allocate("CONFIG"))const preset g_DefaultPreset = { "Default", "ffmpeg.exe -i %I %i.%f" };
 __declspec(allocate("CONFIG"))std::string current_preset_name = "Default";
-static void WINAPI SendNotification(const std::wstring& message) {
-	CoInitialize(NULL);
 
-	IUIAutomation* pAutomation = NULL;
-	HRESULT hr = CoCreateInstance(CLSID_CUIAutomation, NULL, CLSCTX_INPROC_SERVER, IID_IUIAutomation, (void**)&pAutomation);
 
-	if (SUCCEEDED(hr)) {
-		IUIAutomationCondition* pCondition = NULL;
-		VARIANT varName;
-		varName.vt = VT_BSTR;
-		varName.bstrVal = SysAllocString(L"");
-		hr = pAutomation->CreatePropertyConditionEx(UIA_NamePropertyId, varName, PropertyConditionFlags_None, &pCondition);
-
-		if (SUCCEEDED(hr)) {
-			Provider* pProvider = new Provider(GetForegroundWindow());
-			IUIAutomationElement* pElement = NULL;
-			hr = pAutomation->ElementFromHandle(GetDesktopWindow(), &pElement);
-
-			if (SUCCEEDED(hr)) {
-				hr = UiaRaiseNotificationEvent(pProvider, NotificationKind_ActionCompleted, NotificationProcessing_ImportantAll, SysAllocString(message.c_str()), SysAllocString(L""));
-
-				if (SUCCEEDED(hr)) {
-					pProvider->Release();
-				}
-			}
-
-			pCondition->Release();
+class UIAutomationSpeech {
+private:
+	IUIAutomation* pAutomation = nullptr;
+	IUIAutomationCondition* pCondition = nullptr;
+	VARIANT varName;
+	Provider* pProvider = nullptr;
+	IUIAutomationElement* pElement = nullptr;
+public:
+	UIAutomationSpeech() {
+		HRESULT hr = CoInitialize(NULL);
+		hr = CoCreateInstance(CLSID_CUIAutomation, NULL, CLSCTX_INPROC_SERVER, IID_IUIAutomation, (void**)&pAutomation);
+		if (FAILED(hr)) {
+			return;
 		}
+
+		varName.vt = VT_BSTR;
+		varName.bstrVal = _bstr_t(L"");
+		hr = pAutomation->CreatePropertyConditionEx(UIA_NamePropertyId, varName, PropertyConditionFlags_None, &pCondition);
+		if (FAILED(hr)) {
+			return;
+		}
+	}
+	~UIAutomationSpeech() {
+		pProvider->Release();
+
+		pCondition->Release();
 
 		pAutomation->Release();
+
 	}
 
-	CoUninitialize();
-}
-static void WINAPI SendNotification(const std::string& message) {
-	std::wstring message_u;
-	unicode_convert(message, message_u);
-	SendNotification(message_u);
-}
-static HHOOK g_KeyboardHook;
-static LRESULT _stdcall KeyboardProc(int nCode, WPARAM wParam, LPARAM lParam) {
-	if (nCode >= 0) {
-		if (wParam == WM_KEYDOWN) {
-			KBDLLHOOKSTRUCT* kbd = (KBDLLHOOKSTRUCT*)lParam;
-			int key = kbd->vkCode;
+	bool Speak(const wchar_t* text, bool interrupt = true) {
+		NotificationProcessing flags = NotificationProcessing_ImportantAll;
+		if (interrupt)
+			flags = NotificationProcessing_ImportantMostRecent;
+		pProvider = new Provider(GetForegroundWindow());
+
+		HRESULT hr = pAutomation->ElementFromHandle(GetForegroundWindow(), &pElement);
+
+		if (FAILED(hr)) {
+			return false;
+		}
+		hr = UiaRaiseNotificationEvent(pProvider, NotificationKind_ActionCompleted, flags, _bstr_t(text), _bstr_t(L""));
+		if (FAILED(hr)) {
+			return false;
 		}
 
-		return CallNextHookEx(g_KeyboardHook, nCode, wParam, lParam);
-	}
-}
+		return true;
 
+	}
+	bool Speak(const char* text, bool interrupt = true) {
+		std::wstring str;
+		UnicodeConvert(text, str);
+		return this->Speak(str.c_str(), interrupt);
+	}
+	bool Speak(const std::string& utf8str, bool interrupt = true) {
+		return this->Speak(utf8str.c_str(), interrupt);
+	}
+	bool Speak(const std::wstring& utf16str, bool interrupt = true) {
+		return this->Speak(utf16str.c_str(), interrupt);
+	}
+
+	bool StopSpeech() {
+		return Speak(L"", true);
+	}
+};
+
+static UIAutomationSpeech g_SpeechProvider;
 
 static int ExecSystemCmd(const std::string& str, std::string& out)
 {
@@ -230,6 +269,11 @@ static int ExecSystemCmd(const std::string& str, std::string& out)
 
 	return status;
 }
+
+
+
+
+
 static std::vector<std::string> string_split(const std::string& delim, const std::string& str)
 {
 	std::vector<std::string> array;
@@ -269,6 +313,8 @@ static std::vector<std::wstring> WINAPI get_files(const std::wstring& path) {
 
 	return files;
 }
+
+
 ma_engine mixer;
 ma_sound player;
 bool g_EngineActive = false;
@@ -297,10 +343,10 @@ bool MA_API play(std::wstring filename) {
 ma_decoder g_Decoder;
 bool MA_API play(std::string filename) {
 	std::wstring filename_u;
-	unicode_convert(filename, filename_u);
+	UnicodeConvert(filename, filename_u);
 	return play(filename_u);
 }
-bool MA_API play_from_memory(const unsigned char data[], size_t data_size = 0, bool wait = true) {
+bool MA_API play_from_memory(const std::vector<unsigned char>& data, bool wait = true) {
 	if (&g_Decoder != nullptr)ma_decoder_uninit(&g_Decoder);
 	if (!g_EngineActive) {
 		if (ma_engine_init(nullptr, &mixer) == MA_SUCCESS)g_EngineActive = true;
@@ -310,7 +356,7 @@ bool MA_API play_from_memory(const unsigned char data[], size_t data_size = 0, b
 		g_SoundActive = false;
 	}
 	if (!g_SoundActive) {
-		ma_decoder_init_memory((char*)data, data_size, nullptr, &g_Decoder);
+		ma_decoder_init_memory(data.data(), data.size(), nullptr, &g_Decoder);
 		ma_result result = ma_sound_init_from_data_source(&mixer, &g_Decoder, MA_SOUND_FLAG_NO_SPATIALIZATION, nullptr, &player);
 		if (result == MA_SUCCESS)g_SoundActive = true;
 		if (result == MA_SUCCESS)ma_sound_start(&player);
@@ -323,6 +369,8 @@ bool MA_API play_from_memory(const unsigned char data[], size_t data_size = 0, b
 	}
 	return false;
 }
+
+
 MA_API ma_bool32 try_parse_format(const char* str, ma_format* pValue)
 {
 	ma_format format;
@@ -380,7 +428,17 @@ std::string _cdecl get_now() {
 	oss << std::put_time(&tm, filename_signature.c_str());
 	return oss.str();
 }
+
 using namespace std;
+
+
+
+
+
+
+
+
+
 bool g_Recording = false;
 bool g_RecordingPaused = false;
 struct application {
@@ -480,8 +538,6 @@ void recording_thread(ma_encoder* encoder) {
 			ma_encoder_write_pcm_frames(encoder, pInputOut, frameCountOut, nullptr);
 			microphone_frames = 0;
 			loopback_frames = 0;
-			microphone_buffer = nullptr;
-			loopback_buffer = nullptr;
 		}
 	}
 }
@@ -489,7 +545,7 @@ class NamedMutex {
 public:
 	NamedMutex(const std::string& name) {
 		std::wstring name_u;
-		unicode_convert(name, name_u);
+		UnicodeConvert(name, name_u);
 		mutex_ = CreateMutexW(nullptr, FALSE, name_u.c_str());
 		if (mutex_ == nullptr) {
 			exit(EXIT_FAILURE);
@@ -527,12 +583,9 @@ private:
 public:
 	std::string filename;
 	CAudioRecorder() = default;  // Default constructor
-	~CAudioRecorder() = default;  // Default destructor
-
-	CAudioRecorder(const CAudioRecorder&) = delete;
-	CAudioRecorder& operator=(const CAudioRecorder&) = delete;
-
-
+	~CAudioRecorder() {
+		this->stop();
+	}
 	inline void start() {
 		if (rec_mtx != nullptr and rec_mtx->try_lock() == false) {
 			delete this;
@@ -551,7 +604,7 @@ public:
 		ma_event_init(&loopback_event);
 		ma_event_init(&microphone_event);
 		std::wstring record_path_u;
-		unicode_convert(record_path, record_path_u);
+		UnicodeConvert(record_path, record_path_u);
 		CreateDirectory(record_path_u.c_str(), nullptr);
 		std::string file = record_path + "/" + get_now() + ".wav";
 		filename = file;
@@ -559,8 +612,8 @@ public:
 		ma_result result = ma_encoder_init_file(file.c_str(), &encoderConfig, &encoder);
 		if (result != MA_SUCCESS) {
 			std::wstring file_u;
-			unicode_convert(file, file_u);
-			if (sound_events == MA_TRUE)		play_from_memory(Error_wav, 15499, false);
+			UnicodeConvert(file, file_u);
+			if (sound_events == MA_TRUE)		play_from_memory(Error_wav, false);
 			alert(L"FPEncoderInitializerError", L"Error initializing audio encoder for file \"" + file_u + L"\" with retcode " + std::to_wstring(result) + L".", MB_ICONERROR);
 			exit(result);
 		}
@@ -576,7 +629,7 @@ public:
 		deviceConfig.pUserData = &encoder;
 		result = ma_device_init(NULL, &deviceConfig, &recording_device);
 		if (result != MA_SUCCESS) {
-			if (sound_events == MA_TRUE)		play_from_memory(Error_wav, 15499, false);
+			if (sound_events == MA_TRUE)		play_from_memory(Error_wav, false);
 			alert(L"FPAudioDeviceInitializerError", L"Error initializing audio device for \"" + g_CurrentInputDevice.name + L"\" with retcode " + std::to_wstring(result) + L".", MB_ICONERROR);
 			exit(result);
 		}
@@ -600,7 +653,7 @@ public:
 
 
 			result = ma_device_init_ex(backends, sizeof(backends) / sizeof(backends[0]), NULL, &loopbackDeviceConfig, &loopback_device);			if (result != MA_SUCCESS) {
-				if (sound_events == MA_TRUE)		play_from_memory(Error_wav, 15499, false);
+				if (sound_events == MA_TRUE)		play_from_memory(Error_wav, false);
 				alert(L"FPAudioDeviceInitializerError", L"Error initializing audio device for \"" + g_CurrentOutputDevice.name + L"\" with retcode " + std::to_wstring(result) + L".", MB_ICONERROR);
 				exit(result);
 			}
@@ -608,7 +661,7 @@ public:
 		}
 		g_LoopbackProcess = MA_TRUE;
 		this->resume();
-		rec_mtx = new NamedMutex("FPRecorderRecording");
+		rec_mtx = new NamedMutex("M1MakerFPRecorder");
 		rec_mtx->lock();
 	}
 	inline void stop() {
@@ -641,6 +694,9 @@ public:
 		paused = false;
 	}
 };
+
+
+
 std::vector<audio_device> MA_API get_input_audio_devices()
 {
 	std::vector<audio_device> audioDevices;
@@ -662,7 +718,7 @@ std::vector<audio_device> MA_API get_input_audio_devices()
 		const char* name = pCaptureDeviceInfos[iCaptureDevice].name;
 		std::string name_str(name);
 		std::wstring name_str_u;
-		unicode_convert(name_str, name_str_u);
+		UnicodeConvert(name_str, name_str_u);
 		audio_device ad;
 		ad.id = pCaptureDeviceInfos[iCaptureDevice].id;
 		ad.name = name_str_u;
@@ -693,7 +749,7 @@ std::vector<audio_device> MA_API get_output_audio_devices()
 		const char* name = pPlaybackDeviceInfos[iPlaybackDevice].name;
 		std::string name_str(name);
 		std::wstring name_str_u;
-		unicode_convert(name_str, name_str_u);
+		UnicodeConvert(name_str, name_str_u);
 		audio_device ad;
 		ad.id = pPlaybackDeviceInfos[iPlaybackDevice].id;
 		ad.name = name_str_u;
@@ -770,7 +826,7 @@ void main_items_construct() {
 	focus(record_start);
 }
 void record_manager_items_construct() {
-	SendNotification(record_path);
+	g_SpeechProvider.Speak(record_path.c_str());
 	items_view_text = create_text(window, L"Items view", 10, 10, 0, 10, 0);
 	items.push_back(items_view_text);
 	items_view_list = create_list(window, 10, 10, 0, 10, 0);
@@ -838,11 +894,6 @@ std::wstring WINAPI get_exe() {
 ma_int32 _stdcall MINIAUDIO_IMPLEMENTATION wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, wchar_t* lpCmdLine, ma_int32       nShowCmd) {
 	DWORD kmod;
 	int kcode;
-	if (wcslen(lpCmdLine) != 0) {
-		MessageBeep(MB_ICONERROR);
-		play_from_memory(Error_wav, 15499);
-		return MA_ERROR;
-	}
 	int result = conf.load();
 	if (result == EXIT_SUCCESS) {
 		try {
@@ -862,6 +913,7 @@ ma_int32 _stdcall MINIAUDIO_IMPLEMENTATION wWinMain(HINSTANCE hInstance, HINSTAN
 					exit(-5);
 				}
 			}
+
 			std::string ind = conf.read("General", "input-device");
 			input_device = std::stoi(ind);
 			std::string oud = conf.read("General", "loopback-device");
@@ -916,11 +968,11 @@ ma_int32 _stdcall MINIAUDIO_IMPLEMENTATION wWinMain(HINSTANCE hInstance, HINSTAN
 		catch (const std::exception& e) {
 			std::string what = e.what();
 			std::wstring what_u;
-			unicode_convert(what, what_u);
+			UnicodeConvert(what, what_u);
 			std::wstring last_value_u;
 			std::wstring last_name_u;
-			unicode_convert(conf.last_name, last_name_u);
-			unicode_convert(conf.last_value, last_value_u);
+			UnicodeConvert(conf.last_name, last_name_u);
+			UnicodeConvert(conf.last_value, last_value_u);
 			if (last_name_u.empty())last_name_u = L"None";
 			if (last_value_u.empty())last_value_u = L"Null";
 			alert(L"FPConfigParsingError", L"An error occurred while loading the existing config file. Error details:\n\"" + what_u + L"\"\nParameter: \"" + last_name_u + L"\".\nValue: \"" + last_value_u + L"\".", MB_ICONERROR);
@@ -928,7 +980,6 @@ ma_int32 _stdcall MINIAUDIO_IMPLEMENTATION wWinMain(HINSTANCE hInstance, HINSTAN
 		}
 	}
 	else if (result == -1) {
-		play_from_memory(Restart_wav, 3563);
 		MessageBeep(0xFFFFFFFF);
 		window = CreateDialog(NULL, MAKEINTRESOURCE(IDD_DIALOG1), NULL, DialogProc);
 		if (!IsWindow(window)) {
@@ -936,13 +987,13 @@ ma_int32 _stdcall MINIAUDIO_IMPLEMENTATION wWinMain(HINSTANCE hInstance, HINSTAN
 			exit(-4);
 		}
 		ShowWindow(window, SW_SHOW);
-		SetDlgItemTextW(window, IDC_EDIT1, README.c_str());
+		std::wstring README_u;
+		UnicodeConvert(README, README_u);
+		SetDlgItemTextW(window, IDC_EDIT1, README_u.c_str());
 		MSG msg;
-		while (GetMessage(&msg, NULL, NULL, 0) && IsWindow(window)) {
-			if (!IsDialogMessage(window, &msg)) {
-				TranslateMessage(&msg);
-				DispatchMessage(&msg);
-			}
+		while (IsWindow(window)) {
+			update_window(window);
+			gui::wait(5);
 		}
 
 
@@ -979,14 +1030,8 @@ ma_int32 _stdcall MINIAUDIO_IMPLEMENTATION wWinMain(HINSTANCE hInstance, HINSTAN
 		RegisterHotKey(nullptr, HOTKEY_RESTART, kmod, kcode);
 		g_CurrentPreset = g_DefaultPreset;
 	}
-	if (IsUserAnAdmin() == TRUE) {
-		window = show_window(L"FPRecorder " + version + L"(Administrator)");
-	}
-	else {
-		window = show_window(L"FPRecorder " + version);
-	}
+	window = show_window(L"FPRecorder " + version + (IsUserAnAdmin() ? L" (Administrator)" : L""));
 	MA_ASSERT(window != 0);
-	g_KeyboardHook = SetWindowsHookEx(WH_KEYBOARD_LL, KeyboardProc, GetModuleHandle(NULL), 0);
 	main_items_construct();
 	presets.push_back(g_DefaultPreset);
 	while (true) {
@@ -997,14 +1042,16 @@ ma_int32 _stdcall MINIAUDIO_IMPLEMENTATION wWinMain(HINSTANCE hInstance, HINSTAN
 			hotkey_pressed(HOTKEY_PAUSERESUME);
 			hotkey_pressed(HOTKEY_RESTART);
 		}
+		if (g_RecordingsManager) {
+			hotkey_pressed(HOTKEY_STARTSTOP);
+		}
 		if (gui::try_close) {
 			gui::try_close = false;
 			if (g_Recording) {
-				if (sound_events == MA_TRUE)		play_from_memory(Error_wav, 15499, false);
-				SendNotification(L"Unable to exit, while recording.");
+				if (sound_events == MA_TRUE)		play_from_memory(Error_wav, false);
+				g_SpeechProvider.Speak("Unable to exit, while recording.");
 				continue;
 			}
-			UnhookWindowsHookEx(g_KeyboardHook);
 			UnregisterHotKey(nullptr, HOTKEY_STARTSTOP);
 			UnregisterHotKey(nullptr, HOTKEY_PAUSERESUME);
 			UnregisterHotKey(nullptr, HOTKEY_RESTART);
@@ -1027,18 +1074,18 @@ ma_int32 _stdcall MINIAUDIO_IMPLEMENTATION wWinMain(HINSTANCE hInstance, HINSTAN
 					ma_sound_uninit(&player);
 					g_SoundActive = false;
 				}
-				SendNotification(L"Closed.");
+				g_SpeechProvider.Speak("Closed.");
 				window_reset();
 				main_items_construct();
 				focus(record_manager);
 				g_RecordingsManager = false;
 			}
 			std::wstring record_path_u;
-			unicode_convert(record_path, record_path_u);
+			UnicodeConvert(record_path, record_path_u);
 			std::vector<wstring> files = get_files(record_path_u);
 			if (files.size() == 0) {
-				if (sound_events == MA_TRUE)		play_from_memory(Error_wav, 15499, false);
-				SendNotification(L"There are no files in \"" + record_path_u + L"\".");
+				if (sound_events == MA_TRUE)		play_from_memory(Error_wav, false);
+				g_SpeechProvider.Speak("There are no files in \"" + record_path + "\".");
 				window_reset();
 				main_items_construct();
 				focus(record_manager);
@@ -1046,7 +1093,7 @@ ma_int32 _stdcall MINIAUDIO_IMPLEMENTATION wWinMain(HINSTANCE hInstance, HINSTAN
 			}
 			if ((key_down(VK_SPACE) && get_current_focus() == items_view_list) || is_pressed(play_button)) {
 				std::wstring record_path_u;
-				unicode_convert(record_path, record_path_u);
+				UnicodeConvert(record_path, record_path_u);
 				play(record_path_u + L"/" + get_focused_list_item_name(items_view_list));
 				if (get_current_focus() == play_button)focus(pause_button);
 			}
@@ -1067,7 +1114,7 @@ ma_int32 _stdcall MINIAUDIO_IMPLEMENTATION wWinMain(HINSTANCE hInstance, HINSTAN
 				else if (result == IDYES)
 				{
 					std::wstring record_path_u;
-					unicode_convert(record_path, record_path_u);
+					UnicodeConvert(record_path, record_path_u);
 					std::wstring file = record_path_u + L"/" + get_focused_list_item_name(items_view_list);
 					if (g_SoundActive) {
 						ma_sound_uninit(&player);
@@ -1085,7 +1132,7 @@ ma_int32 _stdcall MINIAUDIO_IMPLEMENTATION wWinMain(HINSTANCE hInstance, HINSTAN
 			conf.write("General", "input-device", std::to_string(input_device));
 			conf.write("General", "loopback-device", std::to_string(loopback_device));
 			conf.save();
-			if (sound_events == MA_TRUE)play_from_memory(Start_wav, 6523);
+			if (sound_events == MA_TRUE)play_from_memory(Start_wav);
 			std::wstring in_device_name = get_focused_list_item_name(input_devices_list);
 			for (unsigned int i = 0; i < in_audio_devices.size(); i++) {
 				if (in_audio_devices[i].name == in_device_name) {
@@ -1109,7 +1156,7 @@ ma_int32 _stdcall MINIAUDIO_IMPLEMENTATION wWinMain(HINSTANCE hInstance, HINSTAN
 		}
 		if (g_Recording && (is_pressed(record_stop) || hotkey_pressed(HOTKEY_STARTSTOP))) {
 			rec.stop();
-			if (sound_events == MA_TRUE)play_from_memory(Stop_wav, 6533);
+			if (sound_events == MA_TRUE)play_from_memory(Stop_wav);
 			g_Recording = false;
 			window_reset();
 			if (audio_format == "jkm" or audio_format == "JKM") {
@@ -1118,23 +1165,22 @@ ma_int32 _stdcall MINIAUDIO_IMPLEMENTATION wWinMain(HINSTANCE hInstance, HINSTAN
 			}
 
 			else if (audio_format != "wav") {
-				ma_sleep(100);
 				string output;
 				std::vector<std::string> split = string_split(".wav", rec.filename);
-				SendNotification(L"Converting...");
+				g_SpeechProvider.Speak("Converting...");
 				std::string cmd = g_CurrentPreset.command;
 				replace(cmd, "%I", "\"" + rec.filename + "\"", true);
 				replace(cmd, "%i", "\"" + split[0] + "\"", true);
 				replace(cmd, "%f", audio_format, true);
 				int result = ExecSystemCmd(cmd, output);
 				if (result != 0) {
-					if (sound_events == MA_TRUE)play_from_memory(Error_wav, 15499, false);
+					if (sound_events == MA_TRUE)play_from_memory(Error_wav, false);
 					wstring output_u;
-					unicode_convert(output, output_u);
+					UnicodeConvert(output, output_u);
 					alert(L"FPError", L"Process exit failure!\nRetcode: " + std::to_wstring(result) + L"\nOutput: \"" + output_u + L"\".", MB_ICONERROR);
 				}
 				std::wstring recording_name_u;
-				unicode_convert(rec.filename, recording_name_u);
+				UnicodeConvert(rec.filename, recording_name_u);
 				DeleteFile(recording_name_u.c_str());
 			}
 			main_items_construct();
@@ -1157,7 +1203,7 @@ ma_int32 _stdcall MINIAUDIO_IMPLEMENTATION wWinMain(HINSTANCE hInstance, HINSTAN
 		if (g_Recording && (is_pressed(record_restart) || hotkey_pressed(HOTKEY_RESTART))) {
 			wait(10);
 			std::wstring recording_name_u;
-			unicode_convert(rec.filename, recording_name_u);
+			UnicodeConvert(rec.filename, recording_name_u);
 			int result = alert(L"FPWarning", L"Are you sure you want to delete the recording \"" + recording_name_u + L"\" and rerecord it to new one? Old record can no longer be restored.", MB_YESNO | MB_ICONEXCLAMATION);
 			if (result == IDNO)continue;
 			else if (result == IDYES)
@@ -1169,7 +1215,7 @@ ma_int32 _stdcall MINIAUDIO_IMPLEMENTATION wWinMain(HINSTANCE hInstance, HINSTAN
 			g_RecordingPaused = false;
 			set_text(record_pause, L"&Pause recording");
 			DeleteFile(recording_name_u.c_str());
-			if (sound_events == MA_TRUE)play_from_memory(Restart_wav, 3563);
+			if (sound_events == MA_TRUE)play_from_memory(Restart_wav);
 		}
 	}
 	(void)hInstance;
