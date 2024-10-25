@@ -45,7 +45,8 @@ using namespace gui;
 const int HOTKEY_STARTSTOP = 1;
 const int HOTKEY_PAUSERESUME = 2;
 const int HOTKEY_RESTART = 3;
-
+int g_Retcode = 0;
+bool g_Running = false;
 
 
 static bool UnicodeConvert(const std::string& input, std::wstring& output) {
@@ -102,8 +103,8 @@ struct preset {
 	std::string name;
 	std::string command;
 };
-preset g_CurrentPreset;
-std::vector<preset> presets;
+static preset g_CurrentPreset;
+static std::vector<preset> presets;
 
 
 __declspec(allocate("CONFIG"))ma_uint32 sample_rate = 44100;
@@ -315,8 +316,8 @@ static std::vector<std::wstring> WINAPI get_files(const std::wstring& path) {
 }
 
 
-ma_engine mixer;
-ma_sound player;
+static ma_engine mixer;
+static ma_sound player;
 bool g_EngineActive = false;
 bool g_SoundActive = false;
 std::wstring current_file;
@@ -340,14 +341,19 @@ bool MA_API play(std::wstring filename) {
 	}
 	return false;
 }
-ma_decoder g_Decoder;
+
+static ma_decoder* g_Decoder;
 bool MA_API play(std::string filename) {
 	std::wstring filename_u;
 	UnicodeConvert(filename, filename_u);
 	return play(filename_u);
 }
 bool MA_API play_from_memory(const std::vector<unsigned char>& data, bool wait = true) {
-	if (&g_Decoder != nullptr)ma_decoder_uninit(&g_Decoder);
+	if (g_Decoder != nullptr) {
+		ma_decoder_uninit(g_Decoder);
+		delete g_Decoder;
+		g_Decoder = nullptr;
+	}
 	if (!g_EngineActive) {
 		if (ma_engine_init(nullptr, &mixer) == MA_SUCCESS)g_EngineActive = true;
 	}
@@ -356,8 +362,9 @@ bool MA_API play_from_memory(const std::vector<unsigned char>& data, bool wait =
 		g_SoundActive = false;
 	}
 	if (!g_SoundActive) {
-		ma_decoder_init_memory(data.data(), data.size(), nullptr, &g_Decoder);
-		ma_result result = ma_sound_init_from_data_source(&mixer, &g_Decoder, MA_SOUND_FLAG_NO_SPATIALIZATION, nullptr, &player);
+		if (g_Decoder == nullptr)g_Decoder = new ma_decoder;
+		ma_decoder_init_memory(data.data(), data.size(), nullptr, g_Decoder);
+		ma_result result = ma_sound_init_from_data_source(&mixer, g_Decoder, MA_SOUND_FLAG_NO_SPATIALIZATION, nullptr, &player);
 		if (result == MA_SUCCESS)g_SoundActive = true;
 		if (result == MA_SUCCESS)ma_sound_start(&player);
 		if (wait) {
@@ -445,7 +452,9 @@ struct application {
 	std::wstring name;
 	ma_uint32 id;
 };
-const application g_LoopbackApplication{ L"", 0 };
+
+static const application g_LoopbackApplication{ L"", 0 };
+
 std::vector<application> WINAPI get_tasklist() {
 	std::vector<application> tasklist;
 	HANDLE hSnapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
@@ -468,8 +477,8 @@ struct audio_device {
 	std::wstring name;
 	ma_device_id id;
 };
-audio_device g_CurrentInputDevice;
-audio_device g_CurrentOutputDevice;
+static audio_device g_CurrentInputDevice;
+static audio_device g_CurrentOutputDevice;
 MA_API float* mix_f32(float* input1, float* input2, ma_uint32 frameCountFirst, ma_uint32 frameCountLast) {
 	float* result = new float[frameCountFirst + frameCountLast];
 	for (ma_uint32 i = 0; i < frameCountFirst + frameCountLast; i++) {
@@ -477,8 +486,8 @@ MA_API float* mix_f32(float* input1, float* input2, ma_uint32 frameCountFirst, m
 	}
 	return result;
 }
-float* loopback_buffer = nullptr;
-float* microphone_buffer = nullptr;
+static float* loopback_buffer = nullptr;
+static float* microphone_buffer = nullptr;
 ma_uint32 loopback_frames;
 ma_uint32 microphone_frames;
 ma_event loopback_event;
@@ -493,7 +502,7 @@ void MA_API audio_recorder_callback(ma_device* pDevice, void* pOutput, const voi
 	if (paused)return;
 	ma_encoder* encoder = reinterpret_cast<ma_encoder*>(pDevice->pUserData);
 	if (g_NullSamplesDestroyed == MA_FALSE) {
-		if (buffer_format = ma_format_f32) {
+		if (buffer_format != ma_format_f32) {
 			float* pInput64 = (float*)(pInput);
 			for (ma_uint32 i = 0; i < frameCount; i++) {
 				if (pInput64[i] == 0)return;
@@ -541,36 +550,7 @@ void recording_thread(ma_encoder* encoder) {
 		}
 	}
 }
-class NamedMutex {
-public:
-	NamedMutex(const std::string& name) {
-		std::wstring name_u;
-		UnicodeConvert(name, name_u);
-		mutex_ = CreateMutexW(nullptr, FALSE, name_u.c_str());
-		if (mutex_ == nullptr) {
-			exit(EXIT_FAILURE);
-		}
-	}
 
-	~NamedMutex() {
-		CloseHandle(mutex_);
-	}
-
-	void lock() {
-		WaitForSingleObject(mutex_, INFINITE);
-	}
-
-	void unlock() {
-		ReleaseMutex(mutex_);
-	}
-	bool try_lock() {
-		return WaitForSingleObject(mutex_, 0) == WAIT_OBJECT_0; // Returns WAIT_OBJECT_0 on success
-	}
-private:
-	HANDLE mutex_;
-};
-
-// FPRecorder must be one instance of recorder class
 class MINIAUDIO_IMPLEMENTATION CAudioRecorder {
 private:
 	ma_device_config deviceConfig;
@@ -579,18 +559,14 @@ private:
 	ma_encoder encoder;
 	ma_device recording_device;
 	ma_device loopback_device;
-	NamedMutex* rec_mtx = nullptr;
 public:
 	std::string filename;
 	CAudioRecorder() = default;  // Default constructor
 	~CAudioRecorder() {
-		this->stop();
+		if (g_Recording)
+			this->stop();
 	}
-	inline void start() {
-		if (rec_mtx != nullptr and rec_mtx->try_lock() == false) {
-			delete this;
-			exit(EXIT_FAILURE);
-		}
+	void start() {
 		loopback_buffer = nullptr;
 		microphone_buffer = nullptr;
 		loopback_frames = 0;
@@ -599,7 +575,8 @@ public:
 		ma_result init_result = ma_data_converter_init(&converter_config, nullptr, &g_Converter);
 		if (init_result != MA_SUCCESS) {
 			alert(L"FPConverterInitializerError", L"Error initializing data converter.", MB_ICONERROR);
-			exit(-3);
+			g_Retcode = -3;
+			g_Running = false;
 		}
 		ma_event_init(&loopback_event);
 		ma_event_init(&microphone_event);
@@ -615,7 +592,8 @@ public:
 			UnicodeConvert(file, file_u);
 			if (sound_events == MA_TRUE)		play_from_memory(Error_wav, false);
 			alert(L"FPEncoderInitializerError", L"Error initializing audio encoder for file \"" + file_u + L"\" with retcode " + std::to_wstring(result) + L".", MB_ICONERROR);
-			exit(result);
+			g_Retcode = result;
+			g_Running = false;
 		}
 		deviceConfig = ma_device_config_init(ma_device_type_capture);
 		if (g_CurrentInputDevice.name != L"NO")
@@ -631,7 +609,8 @@ public:
 		if (result != MA_SUCCESS) {
 			if (sound_events == MA_TRUE)		play_from_memory(Error_wav, false);
 			alert(L"FPAudioDeviceInitializerError", L"Error initializing audio device for \"" + g_CurrentInputDevice.name + L"\" with retcode " + std::to_wstring(result) + L".", MB_ICONERROR);
-			exit(result);
+			g_Retcode = result;
+			g_Running = false;
 		}
 		ma_device_start(&recording_device);
 		if (g_CurrentOutputDevice.name != L"NO") {
@@ -655,16 +634,15 @@ public:
 			result = ma_device_init_ex(backends, sizeof(backends) / sizeof(backends[0]), NULL, &loopbackDeviceConfig, &loopback_device);			if (result != MA_SUCCESS) {
 				if (sound_events == MA_TRUE)		play_from_memory(Error_wav, false);
 				alert(L"FPAudioDeviceInitializerError", L"Error initializing audio device for \"" + g_CurrentOutputDevice.name + L"\" with retcode " + std::to_wstring(result) + L".", MB_ICONERROR);
-				exit(result);
+				g_Retcode = result;
+				g_Running = false;
 			}
 			ma_device_start(&loopback_device);
 		}
 		g_LoopbackProcess = MA_TRUE;
 		this->resume();
-		rec_mtx = new NamedMutex("M1MakerFPRecorder");
-		rec_mtx->lock();
 	}
-	inline void stop() {
+	void stop() {
 		ma_event_signal(&microphone_event);
 		ma_device_uninit(&recording_device);
 		if (g_CurrentOutputDevice.name != L"NO") {
@@ -672,9 +650,6 @@ public:
 			g_LoopbackProcess = MA_FALSE;
 			ma_event_signal(&loopback_event);
 			ma_device_uninit(&loopback_device);
-			rec_mtx->unlock();
-			delete rec_mtx;
-			rec_mtx = nullptr;
 		}
 		ma_encoder_uninit(&encoder);
 		ma_event_uninit(&loopback_event);
@@ -682,12 +657,12 @@ public:
 		g_NullSamplesDestroyed = MA_FALSE;
 		ma_data_converter_uninit(&g_Converter, nullptr);
 	}
-	inline void pause() {
+	void pause() {
 		thread_shutdown = true;
 		paused = true;
 		g_NullSamplesDestroyed = MA_FALSE;
 	}
-	inline void resume() {
+	void resume() {
 		thread_shutdown = false;
 		std::thread t(recording_thread, &encoder);
 		t.detach();
@@ -760,28 +735,28 @@ std::vector<audio_device> MA_API get_output_audio_devices()
 	return audioDevices;
 }
 
-HWND window;
-const std::wstring version = L"0.0.0";
-std::vector<HWND> items;
-CAudioRecorder rec;
-HWND record_start;
-HWND input_devices_text;
-HWND input_devices_list;
-HWND output_devices_text;
-HWND output_devices_list;
-HWND record_manager;
-HWND items_view_text;
-HWND items_view_list;
-HWND play_button;
-HWND pause_button;
-HWND stop_button;
-HWND delete_button;
-HWND close_button;
-HWND record_stop;
-HWND record_pause;
-HWND record_restart;
-std::vector<audio_device> in_audio_devices;
-std::vector < audio_device> out_audio_devices;
+HWND window = nullptr;
+const std::wstring version = L"0.0.1";
+static std::vector<HWND> items;
+static CAudioRecorder rec;
+HWND record_start = nullptr;
+HWND input_devices_text = nullptr;
+HWND input_devices_list = nullptr;
+HWND output_devices_text = nullptr;
+HWND output_devices_list = nullptr;
+HWND record_manager = nullptr;
+HWND items_view_text = nullptr;
+HWND items_view_list = nullptr;
+HWND play_button = nullptr;
+HWND pause_button = nullptr;
+HWND stop_button = nullptr;
+HWND delete_button = nullptr;
+HWND close_button = nullptr;
+HWND record_stop = nullptr;
+HWND record_pause = nullptr;
+HWND record_restart = nullptr;
+static std::vector<audio_device> in_audio_devices;
+static std::vector < audio_device> out_audio_devices;
 // GUI functions
 static inline void window_reset() {
 	for (unsigned int i = 0; i < items.size(); i++) {
@@ -891,7 +866,9 @@ std::wstring WINAPI get_exe() {
 
 	return std::wstring(pathBuf.begin(), pathBuf.end());
 }
-ma_int32 _stdcall MINIAUDIO_IMPLEMENTATION wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, wchar_t* lpCmdLine, ma_int32       nShowCmd) {
+
+static ma_int32 _stdcall MINIAUDIO_IMPLEMENTATION wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, wchar_t* lpCmdLine, ma_int32       nShowCmd) {
+	g_Running = true;
 	DWORD kmod;
 	int kcode;
 	int result = conf.load();
@@ -910,7 +887,8 @@ ma_int32 _stdcall MINIAUDIO_IMPLEMENTATION wWinMain(HINSTANCE hInstance, HINSTAN
 				std::string output;
 				if (ExecSystemCmd("ffmpeg.exe -h", output) != 0) {
 					alert(L"FPFFMPegInitializerError", L"Get exit code 0 failed for \"ffmpeg.exe\". Either it is not found, or use the wav format.", MB_ICONERROR);
-					exit(-5);
+					g_Retcode = -5;
+					g_Running = false;
 				}
 			}
 
@@ -976,7 +954,8 @@ ma_int32 _stdcall MINIAUDIO_IMPLEMENTATION wWinMain(HINSTANCE hInstance, HINSTAN
 			if (last_name_u.empty())last_name_u = L"None";
 			if (last_value_u.empty())last_value_u = L"Null";
 			alert(L"FPConfigParsingError", L"An error occurred while loading the existing config file. Error details:\n\"" + what_u + L"\"\nParameter: \"" + last_name_u + L"\".\nValue: \"" + last_value_u + L"\".", MB_ICONERROR);
-			exit(0 - 2);
+			g_Retcode = -2;
+			g_Running = false;
 		}
 	}
 	else if (result == -1) {
@@ -984,13 +963,13 @@ ma_int32 _stdcall MINIAUDIO_IMPLEMENTATION wWinMain(HINSTANCE hInstance, HINSTAN
 		window = CreateDialog(NULL, MAKEINTRESOURCE(IDD_DIALOG1), NULL, DialogProc);
 		if (!IsWindow(window)) {
 			alert(L"FPWelcomeDialogInitializerError", L"File: " + get_exe() + L"\\.rsrc\\DIALOG\\" + std::to_wstring(IDD_DIALOG1) + L" not found.", MB_ICONERROR);
-			exit(-4);
+			g_Retcode = -4;
+			g_Running = false;
 		}
 		ShowWindow(window, SW_SHOW);
 		std::wstring README_u;
 		UnicodeConvert(README, README_u);
 		SetDlgItemTextW(window, IDC_EDIT1, README_u.c_str());
-		MSG msg;
 		while (IsWindow(window)) {
 			update_window(window);
 			gui::wait(5);
@@ -1030,11 +1009,10 @@ ma_int32 _stdcall MINIAUDIO_IMPLEMENTATION wWinMain(HINSTANCE hInstance, HINSTAN
 		RegisterHotKey(nullptr, HOTKEY_RESTART, kmod, kcode);
 		g_CurrentPreset = g_DefaultPreset;
 	}
-	window = show_window(L"FPRecorder " + version + (IsUserAnAdmin() ? L" (Administrator)" : L""));
-	MA_ASSERT(window != 0);
+	window = show_window(L"FPRecorder " + version + (IsUserAnAdmin() ? L" (Administrator)" : L"")); assert(window >= 0);
 	main_items_construct();
 	presets.push_back(g_DefaultPreset);
-	while (true) {
+	while (g_Running) {
 		wait(5);
 		update_window(window);
 		// Avoid invalid hotkey presses not in recording mode.
@@ -1052,10 +1030,9 @@ ma_int32 _stdcall MINIAUDIO_IMPLEMENTATION wWinMain(HINSTANCE hInstance, HINSTAN
 				g_SpeechProvider.Speak("Unable to exit, while recording.");
 				continue;
 			}
-			UnregisterHotKey(nullptr, HOTKEY_STARTSTOP);
-			UnregisterHotKey(nullptr, HOTKEY_PAUSERESUME);
-			UnregisterHotKey(nullptr, HOTKEY_RESTART);
-			exit(0);
+			g_Retcode = 0;
+			g_Running = false;
+			break;
 		}
 		if (is_pressed(record_manager) and !g_RecordingsManager) {
 			loopback_device = get_list_position(output_devices_list);
@@ -1161,7 +1138,8 @@ ma_int32 _stdcall MINIAUDIO_IMPLEMENTATION wWinMain(HINSTANCE hInstance, HINSTAN
 			window_reset();
 			if (audio_format == "jkm" or audio_format == "JKM") {
 				alert(L"FPInteractiveAudioConverter", L"JKM - Jigsaw Kompression Media V 99.54.2. This audio format will be in 2015, October 95 at 3 hours -19 minutes.", MB_ICONHAND);
-				exit(-256);
+				g_Retcode = -256;
+				g_Running = false;
 			}
 
 			else if (audio_format != "wav") {
@@ -1218,7 +1196,11 @@ ma_int32 _stdcall MINIAUDIO_IMPLEMENTATION wWinMain(HINSTANCE hInstance, HINSTAN
 			if (sound_events == MA_TRUE)play_from_memory(Restart_wav);
 		}
 	}
+	UnregisterHotKey(nullptr, HOTKEY_STARTSTOP);
+	UnregisterHotKey(nullptr, HOTKEY_PAUSERESUME);
+	UnregisterHotKey(nullptr, HOTKEY_RESTART);
+	hide_window(window);
 	(void)hInstance;
 	(void)hPrevInstance;
-	return MA_SUCCESS;
+	return g_Retcode;
 }
