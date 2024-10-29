@@ -39,7 +39,7 @@
 #include<sstream>
 #include<thread>
 #include <vector>
-
+#include <dbghelp.h>
 
 using namespace gui;
 const int HOTKEY_STARTSTOP = 1;
@@ -98,6 +98,43 @@ static bool _cdecl replace(std::string& str, const std::string& from, const std:
 	return replaced; // Return true if any replacement was made
 }
 
+LONG WINAPI ExceptionHandler(EXCEPTION_POINTERS* exceptionInfo) {
+	std::stringstream ss;
+	ss << "Caught an access violation (segmentation fault)." << std::endl;
+
+	// Get the address where the exception occurred
+	ULONG_PTR faultingAddress = exceptionInfo->ExceptionRecord->ExceptionInformation[1];
+	ss << "Faulting address: " << faultingAddress << std::endl;
+
+	// Capture the stack trace
+	void* stack[100];
+	unsigned short frames;
+	SYMBOL_INFO* symbol;
+	HANDLE process = GetCurrentProcess();
+
+	SymInitialize(process, NULL, TRUE);
+	frames = CaptureStackBackTrace(0, 100, stack, NULL);
+
+	symbol = (SYMBOL_INFO*)calloc(sizeof(SYMBOL_INFO) + 256 * sizeof(char), 1);
+	symbol->MaxNameLen = 255;
+	symbol->SizeOfStruct = sizeof(SYMBOL_INFO);
+
+	for (unsigned short i = 0; i < frames; i++) {
+		SymFromAddr(process, (DWORD64)(stack[i]), 0, symbol);
+		ss << i << ": " << symbol->Name << " - 0x" << symbol->Address << std::endl;
+	}
+
+	free(symbol);
+	std::wstring str_u;
+	UnicodeConvert(ss.str(), str_u);
+	alert(L"FPRuntimeError", str_u, MB_ICONERROR);
+	g_Retcode = -100;
+	g_Running = false;
+	return 0;
+}
+
+
+
 
 struct preset {
 	std::string name;
@@ -149,11 +186,11 @@ public:
 		}
 	}
 	~UIAutomationSpeech() {
-		pProvider->Release();
+		if (pProvider)pProvider->Release();
 
-		pCondition->Release();
+		if (pCondition)pCondition->Release();
 
-		pAutomation->Release();
+		if (pAutomation)pAutomation->Release();
 
 	}
 
@@ -869,6 +906,7 @@ std::wstring WINAPI get_exe() {
 
 static ma_int32 _stdcall MINIAUDIO_IMPLEMENTATION wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, wchar_t* lpCmdLine, ma_int32       nShowCmd) {
 	g_Running = true;
+	SetUnhandledExceptionFilter(ExceptionHandler);
 	DWORD kmod;
 	int kcode;
 	int result = conf.load();
@@ -1009,6 +1047,7 @@ static ma_int32 _stdcall MINIAUDIO_IMPLEMENTATION wWinMain(HINSTANCE hInstance, 
 		RegisterHotKey(nullptr, HOTKEY_RESTART, kmod, kcode);
 		g_CurrentPreset = g_DefaultPreset;
 	}
+	if (!g_Running)return g_Retcode;
 	window = show_window(L"FPRecorder " + version + (IsUserAnAdmin() ? L" (Administrator)" : L"")); assert(window >= 0);
 	main_items_construct();
 	presets.push_back(g_DefaultPreset);
