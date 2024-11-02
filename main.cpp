@@ -130,6 +130,8 @@ LONG WINAPI ExceptionHandler(EXCEPTION_POINTERS* exceptionInfo) {
 	alert(L"FPRuntimeError", str_u, MB_ICONERROR);
 	g_Retcode = -100;
 	g_Running = false;
+	timeEndPeriod(1);
+	exit(g_Retcode);// Force exit when the exception is thrown
 	return 0;
 }
 
@@ -142,7 +144,6 @@ struct preset {
 };
 static preset g_CurrentPreset;
 static std::vector<preset> presets;
-
 
 __declspec(allocate("CONFIG"))ma_uint32 sample_rate = 44100;
 __declspec(allocate("CONFIG"))ma_uint32 channels = 2;
@@ -345,7 +346,7 @@ static std::vector<std::wstring> WINAPI get_files(const std::wstring& path) {
 			}
 		}
 	}
-	catch (const std::exception& e) {
+	catch (const std::exception& exc) {
 		return files;
 	}
 
@@ -516,6 +517,7 @@ struct audio_device {
 };
 static audio_device g_CurrentInputDevice;
 static audio_device g_CurrentOutputDevice;
+
 MA_API float* mix_f32(float* input1, float* input2, ma_uint32 frameCountFirst, ma_uint32 frameCountLast) {
 	float* result = new float[frameCountFirst + frameCountLast];
 	for (ma_uint32 i = 0; i < frameCountFirst + frameCountLast; i++) {
@@ -527,16 +529,17 @@ static float* loopback_buffer = nullptr;
 static float* microphone_buffer = nullptr;
 ma_uint32 loopback_frames;
 ma_uint32 microphone_frames;
-ma_event loopback_event;
-ma_event microphone_event;
-ma_bool8 g_LoopbackProcess = MA_TRUE;
+static ma_event loopback_event;
+static ma_event microphone_event;
+ma_bool8 g_LoopbackProcess = MA_FALSE;
+ma_bool8 g_MicrophoneProcess = MA_FALSE;
 bool thread_shutdown = false;
 bool paused = false;
 ma_bool8 g_NullSamplesDestroyed = MA_FALSE;
 ma_data_converter g_Converter;
 void MA_API audio_recorder_callback(ma_device* pDevice, void* pOutput, const void* pInput, ma_uint32 frameCount)
 {
-	if (paused)return;
+	if (paused || !g_MicrophoneProcess)return;
 	ma_encoder* encoder = reinterpret_cast<ma_encoder*>(pDevice->pUserData);
 	if (g_NullSamplesDestroyed == MA_FALSE) {
 		if (buffer_format != ma_format_f32) {
@@ -547,7 +550,7 @@ void MA_API audio_recorder_callback(ma_device* pDevice, void* pOutput, const voi
 			}
 		}
 	}
-	if (g_CurrentOutputDevice.name == L"NO") {
+	if (g_CurrentOutputDevice.name == L"Not used") {
 		void* pInputOut = (void*)pInput;
 		ma_uint64 frameCountToProcess = frameCount;
 		ma_uint64 frameCountOut = frameCount * 2;
@@ -564,17 +567,37 @@ void MA_API audio_recorder_callback(ma_device* pDevice, void* pOutput, const voi
 void MA_API audio_recorder_callback_loopback(ma_device* pDevice, void* pOutput, const void* pInput, ma_uint32 frameCount) {
 	if (paused)return;
 	if (!g_LoopbackProcess)return;
-	loopback_buffer = (float*)pInput;
-	loopback_frames = frameCount;
-	ma_event_signal(&loopback_event);
+	ma_encoder* encoder = reinterpret_cast<ma_encoder*>(pDevice->pUserData);
+
+	if (g_NullSamplesDestroyed == MA_FALSE) {
+		if (buffer_format != ma_format_f32) {
+			float* pInput64 = (float*)(pInput);
+			for (ma_uint32 i = 0; i < frameCount; i++) {
+				if (pInput64[i] == 0)return;
+				else g_NullSamplesDestroyed = MA_TRUE;
+			}
+		}
+	}
+	if (g_CurrentInputDevice.name == L"Not used") {
+		void* pInputOut = (void*)pInput;
+		ma_uint64 frameCountToProcess = frameCount;
+		ma_uint64 frameCountOut = frameCount * 2;
+		ma_data_converter_process_pcm_frames__format_only(&g_Converter, pInput, &frameCountToProcess, pInputOut, &frameCountOut);
+		ma_encoder_write_pcm_frames(encoder, pInputOut, frameCountOut, nullptr);
+	}
+	else {
+		loopback_buffer = (float*)pInput;
+		loopback_frames = frameCount;
+		ma_event_signal(&loopback_event);
+	}
 	(void)pOutput;
-	(void)pDevice;
 }
-void recording_thread(ma_encoder* encoder) {
+
+static void recording_thread(ma_encoder* encoder) {
 	while (!thread_shutdown) {
 		ma_event_wait(&microphone_event);
 		ma_event_wait(&loopback_event);
-		if (microphone_buffer != nullptr and loopback_buffer != nullptr) {
+		if (microphone_buffer != nullptr and loopback_buffer != nullptr && g_MicrophoneProcess && g_LoopbackProcess) {
 			void* result = nullptr;
 			result = mix_f32((float*)microphone_buffer, (float*)loopback_buffer, microphone_frames, loopback_frames);
 			void* pInputOut = (void*)result;
@@ -632,25 +655,28 @@ public:
 			g_Retcode = result;
 			g_Running = false;
 		}
-		deviceConfig = ma_device_config_init(ma_device_type_capture);
-		if (g_CurrentInputDevice.name != L"NO")
-			deviceConfig.capture.pDeviceID = &g_CurrentInputDevice.id;
-		deviceConfig.capture.format = ma_format_f32;
-		deviceConfig.capture.channels = channels;
-		deviceConfig.sampleRate = sample_rate;
-		deviceConfig.periodSizeInMilliseconds = buffer_size;
-		deviceConfig.periods = periods;
-		deviceConfig.dataCallback = audio_recorder_callback;
-		deviceConfig.pUserData = &encoder;
-		result = ma_device_init(NULL, &deviceConfig, &recording_device);
-		if (result != MA_SUCCESS) {
-			if (sound_events == MA_TRUE)		play_from_memory(Error_wav, false);
-			alert(L"FPAudioDeviceInitializerError", L"Error initializing audio device for \"" + g_CurrentInputDevice.name + L"\" with retcode " + std::to_wstring(result) + L".", MB_ICONERROR);
-			g_Retcode = result;
-			g_Running = false;
+		if (g_CurrentInputDevice.name != L"Not used") {
+			deviceConfig = ma_device_config_init(ma_device_type_capture);
+			if (g_CurrentInputDevice.name != L"Default")
+				deviceConfig.capture.pDeviceID = &g_CurrentInputDevice.id;
+			deviceConfig.capture.format = ma_format_f32;
+			deviceConfig.capture.channels = channels;
+			deviceConfig.sampleRate = sample_rate;
+			deviceConfig.periodSizeInMilliseconds = buffer_size;
+			deviceConfig.periods = periods;
+			deviceConfig.dataCallback = audio_recorder_callback;
+			deviceConfig.pUserData = &encoder;
+			result = ma_device_init(NULL, &deviceConfig, &recording_device);
+			if (result != MA_SUCCESS) {
+				if (sound_events == MA_TRUE)		play_from_memory(Error_wav, false);
+				alert(L"FPAudioDeviceInitializerError", L"Error initializing audio device for \"" + g_CurrentInputDevice.name + L"\" with retcode " + std::to_wstring(result) + L".", MB_ICONERROR);
+				g_Retcode = result;
+				g_Running = false;
+			}
+			ma_device_start(&recording_device);
+			g_MicrophoneProcess = MA_TRUE;
 		}
-		ma_device_start(&recording_device);
-		if (g_CurrentOutputDevice.name != L"NO") {
+		if (g_CurrentOutputDevice.name != L"Not used") {
 			loopbackDeviceConfig = ma_device_config_init(ma_device_type_loopback);
 			loopbackDeviceConfig.capture.pDeviceID = &g_CurrentOutputDevice.id;;
 			loopbackDeviceConfig.capture.format = ma_format_f32;
@@ -662,7 +688,7 @@ public:
 			loopbackDeviceConfig.sampleRate = sample_rate;
 			loopbackDeviceConfig.periodSizeInMilliseconds = buffer_size;
 			loopbackDeviceConfig.dataCallback = audio_recorder_callback_loopback;
-			loopbackDeviceConfig.pUserData = nullptr;
+			loopbackDeviceConfig.pUserData = &encoder;
 			ma_backend backends[] = {
 				ma_backend_wasapi
 			};
@@ -675,14 +701,17 @@ public:
 				g_Running = false;
 			}
 			ma_device_start(&loopback_device);
+			g_LoopbackProcess = MA_TRUE;
 		}
-		g_LoopbackProcess = MA_TRUE;
 		this->resume();
 	}
 	void stop() {
-		ma_event_signal(&microphone_event);
-		ma_device_uninit(&recording_device);
-		if (g_CurrentOutputDevice.name != L"NO") {
+		if (g_MicrophoneProcess) {
+			ma_event_signal(&microphone_event);
+			ma_device_uninit(&recording_device);
+			g_MicrophoneProcess = MA_FALSE;
+		}
+		if (g_LoopbackProcess) {
 			thread_shutdown = true;
 			g_LoopbackProcess = MA_FALSE;
 			ma_event_signal(&loopback_event);
@@ -701,8 +730,10 @@ public:
 	}
 	void resume() {
 		thread_shutdown = false;
-		std::thread t(recording_thread, &encoder);
-		t.detach();
+		if (g_MicrophoneProcess == MA_TRUE && g_LoopbackProcess == MA_TRUE) {
+			std::thread t(recording_thread, &encoder);
+			t.detach();
+		}
 		paused = false;
 	}
 };
@@ -799,12 +830,12 @@ static inline void window_reset() {
 	for (unsigned int i = 0; i < items.size(); i++) {
 		delete_control(items[i]);
 	}
-	items.resize(0);
+	items.clear();
 }
 
 void main_items_construct() {
-	g_CurrentInputDevice.name = L"NO";
-	g_CurrentOutputDevice.name = L"NO";
+	g_CurrentInputDevice.name = L"Default";
+	g_CurrentOutputDevice.name = L"Not used";
 	record_start = create_button(window, L"&Start recording", 10, 10, 200, 50, 0);
 	items.push_back(record_start);
 
@@ -814,11 +845,19 @@ void main_items_construct() {
 
 	input_devices_list = create_list(window, 10, 90, 200, 150, 0);
 	items.push_back(input_devices_list);
-	add_list_item(input_devices_list, L"Default");
+	audio_device in;
+	audio_device out;
+
 	in_audio_devices = get_input_audio_devices();
+	in.name = L"Default";
+	in_audio_devices.push_back(in);
+	in.name = L"Not used";
+	in_audio_devices.push_back(in);
+
 	for (unsigned int i = 0; i < in_audio_devices.size(); i++) {
 		add_list_item(input_devices_list, in_audio_devices[i].name.c_str());
 	}
+
 	focus(input_devices_list);
 	set_list_position(input_devices_list, input_device);
 	output_devices_text = create_text(window, L"&Output loopback devices", 10, 250, 200, 20, 0);
@@ -826,11 +865,15 @@ void main_items_construct() {
 
 	output_devices_list = create_list(window, 10, 270, 200, 150, 0);
 	items.push_back(output_devices_list);
-	add_list_item(output_devices_list, L"Not used");
+
 	out_audio_devices = get_output_audio_devices();
+	out.name = L"Not used";
+	out_audio_devices.push_back(out);
+
 	for (unsigned int i = 0; i < out_audio_devices.size(); i++) {
 		add_list_item(output_devices_list, out_audio_devices[i].name.c_str());
 	}
+
 	focus(output_devices_list);
 	set_list_position(output_devices_list, loopback_device);
 	record_manager = create_button(window, L"&Recordings manager", 10, 450, 200, 50, 0);
@@ -904,9 +947,10 @@ std::wstring WINAPI get_exe() {
 	return std::wstring(pathBuf.begin(), pathBuf.end());
 }
 
-static ma_int32 _stdcall MINIAUDIO_IMPLEMENTATION wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, wchar_t* lpCmdLine, ma_int32       nShowCmd) {
+static inline ma_int32 _stdcall MINIAUDIO_IMPLEMENTATION wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, wchar_t* lpCmdLine, ma_int32       nShowCmd) {
 	g_Running = true;
 	SetUnhandledExceptionFilter(ExceptionHandler);
+	timeBeginPeriod(1);
 	DWORD kmod;
 	int kcode;
 	int result = conf.load();
@@ -1048,198 +1092,205 @@ static ma_int32 _stdcall MINIAUDIO_IMPLEMENTATION wWinMain(HINSTANCE hInstance, 
 		g_CurrentPreset = g_DefaultPreset;
 	}
 	if (!g_Running)return g_Retcode;
-	window = show_window(L"FPRecorder " + version + (IsUserAnAdmin() ? L" (Administrator)" : L"")); assert(window >= 0);
-	main_items_construct();
-	presets.push_back(g_DefaultPreset);
-	while (g_Running) {
-		wait(5);
-		update_window(window);
-		// Avoid invalid hotkey presses not in recording mode.
-		if (!g_Recording) {
-			hotkey_pressed(HOTKEY_PAUSERESUME);
-			hotkey_pressed(HOTKEY_RESTART);
-		}
-		if (g_RecordingsManager) {
-			hotkey_pressed(HOTKEY_STARTSTOP);
-		}
-		if (gui::try_close) {
-			gui::try_close = false;
-			if (g_Recording) {
-				if (sound_events == MA_TRUE)		play_from_memory(Error_wav, false);
-				g_SpeechProvider.Speak("Unable to exit, while recording.");
-				continue;
+	try {
+		window = show_window(L"FPRecorder " + version + (IsUserAnAdmin() ? L" (Administrator)" : L"")); assert(window >= 0);
+		main_items_construct();
+		presets.push_back(g_DefaultPreset);
+		while (g_Running) {
+			wait(1);
+			update_window(window);
+			// Avoid invalid hotkey presses not in recording mode.
+			if (!g_Recording) {
+				hotkey_pressed(HOTKEY_PAUSERESUME);
+				hotkey_pressed(HOTKEY_RESTART);
 			}
-			g_Retcode = 0;
-			g_Running = false;
-			break;
-		}
-		if (is_pressed(record_manager) and !g_RecordingsManager) {
-			loopback_device = get_list_position(output_devices_list);
-			input_device = get_list_position(input_devices_list);
-			conf.write("General", "input-device", std::to_string(input_device));
-			conf.write("General", "loopback-device", std::to_string(loopback_device));
-			conf.save();
-			window_reset();
-			record_manager_items_construct();
-			if (sound_events == MA_TRUE)play_from_memory(Openmanager_wav, 20673);
-			g_RecordingsManager = true;
-		}
-		if (g_RecordingsManager) {
-			if (key_down(VK_ESCAPE) or is_pressed(close_button)) {
-				if (g_SoundActive) {
-					ma_sound_uninit(&player);
-					g_SoundActive = false;
+			if (g_RecordingsManager) {
+				hotkey_pressed(HOTKEY_STARTSTOP);
+			}
+			if (gui::try_close) {
+				gui::try_close = false;
+				if (g_Recording) {
+					if (sound_events == MA_TRUE)		play_from_memory(Error_wav, false);
+					g_SpeechProvider.Speak("Unable to exit, while recording.");
+					continue;
 				}
-				g_SpeechProvider.Speak("Closed.");
+				g_Retcode = 0;
+				g_Running = false;
+				break;
+			}
+			if (is_pressed(record_manager) and !g_RecordingsManager) {
+				loopback_device = get_list_position(output_devices_list);
+				input_device = get_list_position(input_devices_list);
+				conf.write("General", "input-device", std::to_string(input_device));
+				conf.write("General", "loopback-device", std::to_string(loopback_device));
+				conf.save();
 				window_reset();
-				main_items_construct();
-				focus(record_manager);
-				g_RecordingsManager = false;
+				record_manager_items_construct();
+				if (sound_events == MA_TRUE)play_from_memory(Openmanager_wav, 20673);
+				g_RecordingsManager = true;
 			}
-			std::wstring record_path_u;
-			UnicodeConvert(record_path, record_path_u);
-			std::vector<wstring> files = get_files(record_path_u);
-			if (files.size() == 0) {
-				if (sound_events == MA_TRUE)		play_from_memory(Error_wav, false);
-				g_SpeechProvider.Speak("There are no files in \"" + record_path + "\".");
-				window_reset();
-				main_items_construct();
-				focus(record_manager);
-				g_RecordingsManager = false;
-			}
-			if ((key_down(VK_SPACE) && get_current_focus() == items_view_list) || is_pressed(play_button)) {
-				std::wstring record_path_u;
-				UnicodeConvert(record_path, record_path_u);
-				play(record_path_u + L"/" + get_focused_list_item_name(items_view_list));
-				if (get_current_focus() == play_button)focus(pause_button);
-			}
-			if (is_pressed(pause_button) and g_SoundActive) {
-				ma_sound_stop(&player);
-				if (get_current_focus() == pause_button)focus(play_button);
-
-			}
-			if (is_pressed(stop_button) and g_SoundActive) {
-				ma_sound_seek_to_pcm_frame(&player, 0);
-				ma_sound_stop(&player);
-			}
-			if (key_pressed(VK_DELETE) or is_pressed(delete_button)) {
-				if (get_focused_list_item_name(items_view_list) == L"")continue;
-				wait(10);
-				int result = alert(L"FPWarning", L"Are you sure you want to delete the recording \"" + get_focused_list_item_name(items_view_list) + L"\"? It can no longer be restored.", MB_YESNO | MB_ICONEXCLAMATION);
-				if (result == IDNO)continue;
-				else if (result == IDYES)
-				{
-					std::wstring record_path_u;
-					UnicodeConvert(record_path, record_path_u);
-					std::wstring file = record_path_u + L"/" + get_focused_list_item_name(items_view_list);
+			if (g_RecordingsManager) {
+				if (key_down(VK_ESCAPE) or is_pressed(close_button)) {
 					if (g_SoundActive) {
 						ma_sound_uninit(&player);
 						g_SoundActive = false;
 					}
-					DeleteFile(file.c_str());
+					g_SpeechProvider.Speak("Closed.");
 					window_reset();
-					record_manager_items_construct();
+					main_items_construct();
+					focus(record_manager);
+					g_RecordingsManager = false;
 				}
-			}
-		}
-		if (!g_Recording && (is_pressed(record_start) || hotkey_pressed(HOTKEY_STARTSTOP))) {
-			loopback_device = get_list_position(output_devices_list);
-			input_device = get_list_position(input_devices_list);
-			conf.write("General", "input-device", std::to_string(input_device));
-			conf.write("General", "loopback-device", std::to_string(loopback_device));
-			conf.save();
-			if (sound_events == MA_TRUE)play_from_memory(Start_wav);
-			std::wstring in_device_name = get_focused_list_item_name(input_devices_list);
-			for (unsigned int i = 0; i < in_audio_devices.size(); i++) {
-				if (in_audio_devices[i].name == in_device_name) {
-					g_CurrentInputDevice = in_audio_devices[i];
-					break;
+				std::wstring record_path_u;
+				UnicodeConvert(record_path, record_path_u);
+				std::vector<wstring> files = get_files(record_path_u);
+				if (files.size() == 0) {
+					if (sound_events == MA_TRUE)		play_from_memory(Error_wav, false);
+					g_SpeechProvider.Speak("There are no files in \"" + record_path + "\".");
+					window_reset();
+					main_items_construct();
+					focus(record_manager);
+					g_RecordingsManager = false;
 				}
-			}
-			std::wstring out_device_name = get_focused_list_item_name(output_devices_list);
-			for (unsigned int i = 0; i < out_audio_devices.size(); i++) {
-				if (out_audio_devices[i].name == out_device_name) {
-					g_CurrentOutputDevice = out_audio_devices[i];
-					break;
+				if ((key_down(VK_SPACE) && get_current_focus() == items_view_list) || is_pressed(play_button)) {
+					std::wstring record_path_u;
+					UnicodeConvert(record_path, record_path_u);
+					play(record_path_u + L"/" + get_focused_list_item_name(items_view_list));
+					if (get_current_focus() == play_button)focus(pause_button);
 				}
-			}
+				if (is_pressed(pause_button) and g_SoundActive) {
+					ma_sound_stop(&player);
+					if (get_current_focus() == pause_button)focus(play_button);
 
-			window_reset();
-			record_items_construct();
-			rec.start();
-			g_Recording = true;
-			g_RecordingPaused = false;
-		}
-		if (g_Recording && (is_pressed(record_stop) || hotkey_pressed(HOTKEY_STARTSTOP))) {
-			rec.stop();
-			if (sound_events == MA_TRUE)play_from_memory(Stop_wav);
-			g_Recording = false;
-			window_reset();
-			if (audio_format == "jkm" or audio_format == "JKM") {
-				alert(L"FPInteractiveAudioConverter", L"JKM - Jigsaw Kompression Media V 99.54.2. This audio format will be in 2015, October 95 at 3 hours -19 minutes.", MB_ICONHAND);
-				g_Retcode = -256;
-				g_Running = false;
-			}
-
-			else if (audio_format != "wav") {
-				string output;
-				std::vector<std::string> split = string_split(".wav", rec.filename);
-				g_SpeechProvider.Speak("Converting...");
-				std::string cmd = g_CurrentPreset.command;
-				replace(cmd, "%I", "\"" + rec.filename + "\"", true);
-				replace(cmd, "%i", "\"" + split[0] + "\"", true);
-				replace(cmd, "%f", audio_format, true);
-				int result = ExecSystemCmd(cmd, output);
-				if (result != 0) {
-					if (sound_events == MA_TRUE)play_from_memory(Error_wav, false);
-					wstring output_u;
-					UnicodeConvert(output, output_u);
-					alert(L"FPError", L"Process exit failure!\nRetcode: " + std::to_wstring(result) + L"\nOutput: \"" + output_u + L"\".", MB_ICONERROR);
 				}
+				if (is_pressed(stop_button) and g_SoundActive) {
+					ma_sound_seek_to_pcm_frame(&player, 0);
+					ma_sound_stop(&player);
+				}
+				if (key_pressed(VK_DELETE) or is_pressed(delete_button)) {
+					if (get_focused_list_item_name(items_view_list) == L"")continue;
+					wait(10);
+					int result = alert(L"FPWarning", L"Are you sure you want to delete the recording \"" + get_focused_list_item_name(items_view_list) + L"\"? It can no longer be restored.", MB_YESNO | MB_ICONEXCLAMATION);
+					if (result == IDNO)continue;
+					else if (result == IDYES)
+					{
+						std::wstring record_path_u;
+						UnicodeConvert(record_path, record_path_u);
+						std::wstring file = record_path_u + L"/" + get_focused_list_item_name(items_view_list);
+						if (g_SoundActive) {
+							ma_sound_uninit(&player);
+							g_SoundActive = false;
+						}
+						DeleteFile(file.c_str());
+						window_reset();
+						record_manager_items_construct();
+					}
+				}
+			}
+			if (!g_Recording && (is_pressed(record_start) || hotkey_pressed(HOTKEY_STARTSTOP))) {
+				loopback_device = get_list_position(output_devices_list);
+				input_device = get_list_position(input_devices_list);
+				conf.write("General", "input-device", std::to_string(input_device));
+				conf.write("General", "loopback-device", std::to_string(loopback_device));
+				conf.save();
+				if (sound_events == MA_TRUE)play_from_memory(Start_wav);
+				g_CurrentInputDevice = in_audio_devices[input_device];
+				g_CurrentOutputDevice = out_audio_devices[loopback_device];
+				if (g_CurrentInputDevice.name == L"Not used" && g_CurrentOutputDevice.name == L"Not used") {
+					if (sound_events == MA_TRUE)play_from_memory(Error_wav);
+					g_SpeechProvider.Speak("Can't record silence", true);
+					if (sound_events == MA_TRUE)play_from_memory(Stop_wav);
+
+					continue;
+				}
+				window_reset();
+				record_items_construct();
+				rec.start();
+				g_Recording = true;
+				g_RecordingPaused = false;
+			}
+			if (g_Recording && (is_pressed(record_stop) || hotkey_pressed(HOTKEY_STARTSTOP))) {
+				rec.stop();
+				if (sound_events == MA_TRUE)play_from_memory(Stop_wav);
+				g_Recording = false;
+				window_reset();
+				if (audio_format == "jkm" or audio_format == "JKM") {
+					alert(L"FPInteractiveAudioConverter", L"JKM - Jigsaw Kompression Media V 99.54.2. This audio format will be in 2015, October 95 at 3 hours -19 minutes.", MB_ICONHAND);
+					g_Retcode = -256;
+					g_Running = false;
+				}
+
+				else if (audio_format != "wav") {
+					string output;
+					std::vector<std::string> split = string_split(".wav", rec.filename);
+					g_SpeechProvider.Speak("Converting...");
+					std::string cmd = g_CurrentPreset.command;
+					replace(cmd, "%I", "\"" + rec.filename + "\"", true);
+					replace(cmd, "%i", "\"" + split[0] + "\"", true);
+					replace(cmd, "%f", audio_format, true);
+					int result = ExecSystemCmd(cmd, output);
+					if (result != 0) {
+						if (sound_events == MA_TRUE)play_from_memory(Error_wav, false);
+						wstring output_u;
+						UnicodeConvert(output, output_u);
+						alert(L"FPError", L"Process exit failure!\nRetcode: " + std::to_wstring(result) + L"\nOutput: \"" + output_u + L"\".", MB_ICONERROR);
+					}
+					std::wstring recording_name_u;
+					UnicodeConvert(rec.filename, recording_name_u);
+					DeleteFile(recording_name_u.c_str());
+				}
+				main_items_construct();
+			}
+			if (g_Recording && (is_pressed(record_pause) || hotkey_pressed(HOTKEY_PAUSERESUME))) {
+				if (!g_RecordingPaused) {
+					rec.pause();
+					if (sound_events == MA_TRUE)play_from_memory(Pause_wav, 9545);
+					g_RecordingPaused = true;
+					set_text(record_pause, L"&Resume recording");
+				}
+				else if (g_RecordingPaused) {
+					if (sound_events == MA_TRUE)play_from_memory(Unpause_wav, 12221);
+					rec.resume();
+					g_RecordingPaused = false;
+					set_text(record_pause, L"&Pause recording");
+				}
+				ma_sleep(100);
+			}
+			if (g_Recording && (is_pressed(record_restart) || hotkey_pressed(HOTKEY_RESTART))) {
+				wait(10);
 				std::wstring recording_name_u;
 				UnicodeConvert(rec.filename, recording_name_u);
-				DeleteFile(recording_name_u.c_str());
-			}
-			main_items_construct();
-		}
-		if (g_Recording && (is_pressed(record_pause) || hotkey_pressed(HOTKEY_PAUSERESUME))) {
-			if (!g_RecordingPaused) {
-				rec.pause();
-				if (sound_events == MA_TRUE)play_from_memory(Pause_wav, 9545);
-				g_RecordingPaused = true;
-				set_text(record_pause, L"&Resume recording");
-			}
-			else if (g_RecordingPaused) {
-				if (sound_events == MA_TRUE)play_from_memory(Unpause_wav, 12221);
-				rec.resume();
+				int result = alert(L"FPWarning", L"Are you sure you want to delete the recording \"" + recording_name_u + L"\" and rerecord it to new one? Old record can no longer be restored.", MB_YESNO | MB_ICONEXCLAMATION);
+				if (result == IDNO)continue;
+				else if (result == IDYES)
+				{
+					rec.stop();
+				}
+				rec.start();
+				g_Recording = true;
 				g_RecordingPaused = false;
 				set_text(record_pause, L"&Pause recording");
+				DeleteFile(recording_name_u.c_str());
+				if (sound_events == MA_TRUE)play_from_memory(Restart_wav);
 			}
-			ma_sleep(100);
-		}
-		if (g_Recording && (is_pressed(record_restart) || hotkey_pressed(HOTKEY_RESTART))) {
-			wait(10);
-			std::wstring recording_name_u;
-			UnicodeConvert(rec.filename, recording_name_u);
-			int result = alert(L"FPWarning", L"Are you sure you want to delete the recording \"" + recording_name_u + L"\" and rerecord it to new one? Old record can no longer be restored.", MB_YESNO | MB_ICONEXCLAMATION);
-			if (result == IDNO)continue;
-			else if (result == IDYES)
-			{
-				rec.stop();
-			}
-			rec.start();
-			g_Recording = true;
-			g_RecordingPaused = false;
-			set_text(record_pause, L"&Pause recording");
-			DeleteFile(recording_name_u.c_str());
-			if (sound_events == MA_TRUE)play_from_memory(Restart_wav);
 		}
 	}
+	catch (const std::exception& ex) {
+		std::wstring exception_u;
+		UnicodeConvert(ex.what(), exception_u);
+		alert(L"FPRuntimeError", exception_u.c_str(), MB_ICONERROR);
+		g_Running = false;
+		g_Retcode = -100;
+	}
+	window_reset();
 	UnregisterHotKey(nullptr, HOTKEY_STARTSTOP);
 	UnregisterHotKey(nullptr, HOTKEY_PAUSERESUME);
 	UnregisterHotKey(nullptr, HOTKEY_RESTART);
 	hide_window(window);
 	(void)hInstance;
 	(void)hPrevInstance;
-	return g_Retcode;
+	(void)lpCmdLine;
+	(void)nShowCmd;
+	timeEndPeriod(1);
+	return g_Retcode; // Application exit
 }
