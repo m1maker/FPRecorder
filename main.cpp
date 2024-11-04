@@ -98,42 +98,7 @@ static bool _cdecl replace(std::string& str, const std::string& from, const std:
 	return replaced; // Return true if any replacement was made
 }
 
-LONG WINAPI ExceptionHandler(EXCEPTION_POINTERS* exceptionInfo) {
-	std::stringstream ss;
-	ss << "Caught an access violation (segmentation fault)." << std::endl;
-
-	// Get the address where the exception occurred
-	ULONG_PTR faultingAddress = exceptionInfo->ExceptionRecord->ExceptionInformation[1];
-	ss << "Faulting address: " << faultingAddress << std::endl;
-
-	// Capture the stack trace
-	void* stack[100];
-	unsigned short frames;
-	SYMBOL_INFO* symbol;
-	HANDLE process = GetCurrentProcess();
-
-	SymInitialize(process, NULL, TRUE);
-	frames = CaptureStackBackTrace(0, 100, stack, NULL);
-
-	symbol = (SYMBOL_INFO*)calloc(sizeof(SYMBOL_INFO) + 256 * sizeof(char), 1);
-	symbol->MaxNameLen = 255;
-	symbol->SizeOfStruct = sizeof(SYMBOL_INFO);
-
-	for (unsigned short i = 0; i < frames; i++) {
-		SymFromAddr(process, (DWORD64)(stack[i]), 0, symbol);
-		ss << i << ": " << symbol->Name << " - 0x" << symbol->Address << std::endl;
-	}
-
-	free(symbol);
-	std::wstring str_u;
-	UnicodeConvert(ss.str(), str_u);
-	alert(L"FPRuntimeError", str_u, MB_ICONERROR);
-	g_Retcode = -100;
-	g_Running = false;
-	timeEndPeriod(1);
-	exit(g_Retcode);// Force exit when the exception is thrown
-	return 0;
-}
+LONG WINAPI ExceptionHandler(EXCEPTION_POINTERS* exceptionInfo);
 
 
 
@@ -621,7 +586,7 @@ private:
 	ma_device loopback_device;
 public:
 	std::string filename;
-	CAudioRecorder() = default;  // Default constructor
+	CAudioRecorder() {}
 	~CAudioRecorder() {
 		if (g_Recording)
 			this->stop();
@@ -803,114 +768,265 @@ std::vector<audio_device> MA_API get_output_audio_devices()
 	return audioDevices;
 }
 
+
+
+class IWindow;
+
+std::vector<IWindow*> g_Windows;
 HWND window = nullptr;
+
+
+class IWindow {
+public:
+	std::vector<HWND> items;
+protected:
+	int id;
+public:
+	void reset() {
+		for (unsigned int i = 0; i < items.size(); i++) {
+			delete_control(items[i]);
+		}
+		items.clear();
+	}
+
+	int push(HWND window) {
+		items.push_back(window);
+		return items.size() - 1;
+	}
+
+	void remove(int index) {
+		if (index > items.size() - 1 || index < 0)return;
+		delete_control(items[index]);
+		items.erase(items.begin() + index);
+	}
+
+	IWindow() {
+		this->reset();
+		g_Windows.push_back(this);
+		this->id = g_Windows.size() - 1;
+	}
+	~IWindow() {
+		this->reset();
+	}
+
+	virtual void build() = 0;
+
+	void auto_size()
+	{
+		// Get the client rectangle of the window
+		RECT clientRect;
+		GetClientRect(window, &clientRect);
+
+		// Iterate through all child windows (controls)
+		HWND childWnd = GetWindow(window, GW_CHILD);
+		while (childWnd != NULL)
+		{
+			// Get the control's rectangle
+			RECT controlRect;
+			GetWindowRect(childWnd, &controlRect);
+
+			// Calculate the new position within the client area
+			int newX = controlRect.left - clientRect.left;
+			int newY = controlRect.top - clientRect.top;
+
+			// Set the control's position within the window
+			SetWindowPos(childWnd, HWND_TOP,
+				newX, newY,
+				controlRect.right - controlRect.left,
+				controlRect.bottom - controlRect.top,
+				SWP_NOSIZE | SWP_NOZORDER);
+
+			// Move to the next child window
+			childWnd = GetWindow(childWnd, GW_HWNDNEXT);
+		}
+	}
+
+
+
+};
+
+static void window_reset() {
+	for (IWindow* w : g_Windows) {
+		w->reset();
+	}
+	g_Windows.clear();
+}
+
 const std::wstring version = L"0.0.1";
-static std::vector<HWND> items;
 static CAudioRecorder rec;
-HWND record_start = nullptr;
-HWND input_devices_text = nullptr;
-HWND input_devices_list = nullptr;
-HWND output_devices_text = nullptr;
-HWND output_devices_list = nullptr;
-HWND record_manager = nullptr;
-HWND items_view_text = nullptr;
-HWND items_view_list = nullptr;
-HWND play_button = nullptr;
-HWND pause_button = nullptr;
-HWND stop_button = nullptr;
-HWND delete_button = nullptr;
-HWND close_button = nullptr;
-HWND record_stop = nullptr;
-HWND record_pause = nullptr;
-HWND record_restart = nullptr;
+
+
 static std::vector<audio_device> in_audio_devices;
 static std::vector < audio_device> out_audio_devices;
-// GUI functions
-static inline void window_reset() {
-	for (unsigned int i = 0; i < items.size(); i++) {
-		delete_control(items[i]);
+
+
+
+
+class CMainWindow : public IWindow {
+public:
+	HWND record_start = nullptr;
+	HWND input_devices_text = nullptr;
+	HWND input_devices_list = nullptr;
+	HWND output_devices_text = nullptr;
+	HWND output_devices_list = nullptr;
+	HWND record_manager = nullptr;
+
+
+	void build()override {
+		g_CurrentInputDevice.name = L"Default";
+		g_CurrentOutputDevice.name = L"Not used";
+		record_start = create_button(window, L"&Start recording", 10, 10, 200, 50, 0);
+		push(record_start);
+
+		input_devices_text = create_text(window, L"&Input devices", 10, 70, 200, 20, 0);
+
+		push(input_devices_text);
+
+		input_devices_list = create_list(window, 10, 90, 200, 150, 0);
+		push(input_devices_list);
+		audio_device in;
+		audio_device out;
+
+		in_audio_devices = get_input_audio_devices();
+		in.name = L"Default";
+		in_audio_devices.push_back(in);
+		in.name = L"Not used";
+		in_audio_devices.push_back(in);
+
+		for (unsigned int i = 0; i < in_audio_devices.size(); i++) {
+			add_list_item(input_devices_list, in_audio_devices[i].name.c_str());
+		}
+
+		focus(input_devices_list);
+		set_list_position(input_devices_list, input_device);
+		output_devices_text = create_text(window, L"&Output loopback devices", 10, 250, 200, 20, 0);
+		push(output_devices_text);
+
+		output_devices_list = create_list(window, 10, 270, 200, 150, 0);
+		push(output_devices_list);
+
+		out_audio_devices = get_output_audio_devices();
+		out.name = L"Not used";
+		out_audio_devices.push_back(out);
+
+		for (unsigned int i = 0; i < out_audio_devices.size(); i++) {
+			add_list_item(output_devices_list, out_audio_devices[i].name.c_str());
+		}
+
+		focus(output_devices_list);
+		set_list_position(output_devices_list, loopback_device);
+		record_manager = create_button(window, L"&Recordings manager", 10, 450, 200, 50, 0);
+		push(record_manager);
+		auto_size();
+
+		focus(record_start);
 	}
-	items.clear();
-}
 
-void main_items_construct() {
-	g_CurrentInputDevice.name = L"Default";
-	g_CurrentOutputDevice.name = L"Not used";
-	record_start = create_button(window, L"&Start recording", 10, 10, 200, 50, 0);
-	items.push_back(record_start);
+};
 
-	input_devices_text = create_text(window, L"&Input devices", 10, 70, 200, 20, 0);
 
-	items.push_back(input_devices_text);
 
-	input_devices_list = create_list(window, 10, 90, 200, 150, 0);
-	items.push_back(input_devices_list);
-	audio_device in;
-	audio_device out;
 
-	in_audio_devices = get_input_audio_devices();
-	in.name = L"Default";
-	in_audio_devices.push_back(in);
-	in.name = L"Not used";
-	in_audio_devices.push_back(in);
+class CRecordManagerWindow : public IWindow {
+public:
+	HWND items_view_text = nullptr;
+	HWND items_view_list = nullptr;
+	HWND play_button = nullptr;
+	HWND pause_button = nullptr;
+	HWND stop_button = nullptr;
+	HWND delete_button = nullptr;
+	HWND close_button = nullptr;
 
-	for (unsigned int i = 0; i < in_audio_devices.size(); i++) {
-		add_list_item(input_devices_list, in_audio_devices[i].name.c_str());
+	void build()override {
+		g_SpeechProvider.Speak(record_path.c_str(), false);
+		wait(50);
+		items_view_text = create_text(window, L"Items view", 10, 10, 0, 10, 0);
+		push(items_view_text);
+		items_view_list = create_list(window, 10, 10, 0, 10, 0);
+		push(items_view_list);
+		play_button = create_button(window, L"&Play", 10, 10, 10, 10, 0);
+		push(play_button);
+		pause_button = create_button(window, L"&Pause", 10, 10, 10, 10, 0);
+		push(pause_button);
+		stop_button = create_button(window, L"&Stop", 10, 10, 10, 10, 0);
+		push(stop_button);
+		delete_button = create_button(window, L"&Delete", 10, 10, 10, 10, 0);
+		push(delete_button);
+		close_button = create_button(window, L"&Close", 10, 10, 10, 10, 0);
+		push(close_button);
+		std::vector<std::wstring> files = get_files(std::wstring(record_path.begin(), record_path.end()));
+		for (unsigned int i = 0; i < files.size(); i++) {
+			add_list_item(items_view_list, files[i].c_str());
+		}
+		auto_size();
+
+		focus(items_view_list);
+
 	}
 
-	focus(input_devices_list);
-	set_list_position(input_devices_list, input_device);
-	output_devices_text = create_text(window, L"&Output loopback devices", 10, 250, 200, 20, 0);
-	items.push_back(output_devices_text);
 
-	output_devices_list = create_list(window, 10, 270, 200, 150, 0);
-	items.push_back(output_devices_list);
 
-	out_audio_devices = get_output_audio_devices();
-	out.name = L"Not used";
-	out_audio_devices.push_back(out);
+};
 
-	for (unsigned int i = 0; i < out_audio_devices.size(); i++) {
-		add_list_item(output_devices_list, out_audio_devices[i].name.c_str());
+
+class CRecordingWindow : public IWindow {
+public:
+	HWND record_stop = nullptr;
+	HWND record_pause = nullptr;
+	HWND record_restart = nullptr;
+
+	void build()override {
+		record_stop = create_button(window, L"&Stop recording", 10, 10, 100, 30, 0);
+		push(record_stop);
+		record_pause = create_button(window, L"&Pause recording", 120, 10, 100, 30, 0);
+		push(record_pause);
+		record_restart = create_button(window, L"&Restart recording", 230, 10, 100, 30, 0);
+		push(record_restart);
+		auto_size();
+
+		focus(record_stop);
+
 	}
 
-	focus(output_devices_list);
-	set_list_position(output_devices_list, loopback_device);
-	record_manager = create_button(window, L"&Recordings manager", 10, 450, 200, 50, 0);
-	items.push_back(record_manager);
-	focus(record_start);
-}
-void record_manager_items_construct() {
-	g_SpeechProvider.Speak(record_path.c_str());
-	items_view_text = create_text(window, L"Items view", 10, 10, 0, 10, 0);
-	items.push_back(items_view_text);
-	items_view_list = create_list(window, 10, 10, 0, 10, 0);
-	items.push_back(items_view_list);
-	play_button = create_button(window, L"&Play", 10, 10, 10, 10, 0);
-	items.push_back(play_button);
-	pause_button = create_button(window, L"&Pause", 10, 10, 10, 10, 0);
-	items.push_back(pause_button);
-	stop_button = create_button(window, L"&Stop", 10, 10, 10, 10, 0);
-	items.push_back(stop_button);
-	delete_button = create_button(window, L"&Delete", 10, 10, 10, 10, 0);
-	items.push_back(delete_button);
-	close_button = create_button(window, L"&Close", 10, 10, 10, 10, 0);
-	items.push_back(close_button);
-	std::vector<std::wstring> files = get_files(std::wstring(record_path.begin(), record_path.end()));
-	for (unsigned int i = 0; i < files.size(); i++) {
-		add_list_item(items_view_list, files[i].c_str());
-	}
-	focus(items_view_list);
-}
-void record_items_construct() {
-	record_stop = create_button(window, L"&Stop recording", 10, 10, 100, 30, 0);
-	items.push_back(record_stop);
-	record_pause = create_button(window, L"&Pause recording", 120, 10, 100, 30, 0);
-	items.push_back(record_pause);
-	record_restart = create_button(window, L"&Restart recording", 230, 10, 100, 30, 0);
-	items.push_back(record_restart);
-	focus(record_stop);
-}
+
+
+
+
+
+
+};
+
+
+
+
+
+class CSettingsWindow : public IWindow {
+public:
+	HWND sample_rate = nullptr;
+	HWND record_path = nullptr;
+	HWND channels = nullptr;
+	HWND buffer_size = nullptr;
+	HWND filename_signature = nullptr;
+	HWND audio_format = nullptr;
+	HWND sound_events = nullptr;
+	HWND sample_format = nullptr;
+	HWND hotkey_start_stop = nullptr;
+	HWND hotkey_pause_resume = nullptr;
+	HWND hotkey_restart = nullptr;
+	HWND current_preset = nullptr;
+
+
+};
+
+
+
+static CMainWindow g_MainWindow;
+static CRecordManagerWindow g_RecordManagerWindow;
+static CRecordingWindow g_RecordingWindow;
+
+
+
+
 bool g_RecordingsManager = false;
 static LRESULT CALLBACK DialogProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
@@ -947,14 +1063,14 @@ std::wstring WINAPI get_exe() {
 	return std::wstring(pathBuf.begin(), pathBuf.end());
 }
 
-static inline ma_int32 _stdcall MINIAUDIO_IMPLEMENTATION wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, wchar_t* lpCmdLine, ma_int32       nShowCmd) {
+static inline signed int _stdcall MINIAUDIO_IMPLEMENTATION WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, wchar_t* lpCmdLine, ma_int32       nShowCmd) {
 	g_Running = true;
 	SetUnhandledExceptionFilter(ExceptionHandler);
 	timeBeginPeriod(1);
-	DWORD kmod;
-	int kcode;
+	DWORD kmod = -1;
+	int kcode = -1;
 	int result = conf.load();
-	if (result == EXIT_SUCCESS) {
+	if (result == 0) {
 		try {
 			std::string srate = conf.read("General", "sample-rate");
 			sample_rate = std::stoi(srate);
@@ -1094,7 +1210,7 @@ static inline ma_int32 _stdcall MINIAUDIO_IMPLEMENTATION wWinMain(HINSTANCE hIns
 	if (!g_Running)return g_Retcode;
 	try {
 		window = show_window(L"FPRecorder " + version + (IsUserAnAdmin() ? L" (Administrator)" : L"")); assert(window >= 0);
-		main_items_construct();
+		g_MainWindow.build();
 		presets.push_back(g_DefaultPreset);
 		while (g_Running) {
 			wait(1);
@@ -1118,27 +1234,27 @@ static inline ma_int32 _stdcall MINIAUDIO_IMPLEMENTATION wWinMain(HINSTANCE hIns
 				g_Running = false;
 				break;
 			}
-			if (is_pressed(record_manager) and !g_RecordingsManager) {
-				loopback_device = get_list_position(output_devices_list);
-				input_device = get_list_position(input_devices_list);
+			if (is_pressed(g_MainWindow.record_manager) and !g_RecordingsManager) {
+				loopback_device = get_list_position(g_MainWindow.output_devices_list);
+				input_device = get_list_position(g_MainWindow.input_devices_list);
 				conf.write("General", "input-device", std::to_string(input_device));
 				conf.write("General", "loopback-device", std::to_string(loopback_device));
 				conf.save();
-				window_reset();
-				record_manager_items_construct();
+				g_MainWindow.reset();
+				g_RecordManagerWindow.build();
 				if (sound_events == MA_TRUE)play_from_memory(Openmanager_wav, 20673);
 				g_RecordingsManager = true;
 			}
 			if (g_RecordingsManager) {
-				if (key_down(VK_ESCAPE) or is_pressed(close_button)) {
+				if (key_down(VK_ESCAPE) or is_pressed(g_RecordManagerWindow.close_button)) {
 					if (g_SoundActive) {
 						ma_sound_uninit(&player);
 						g_SoundActive = false;
 					}
 					g_SpeechProvider.Speak("Closed.");
-					window_reset();
-					main_items_construct();
-					focus(record_manager);
+					g_RecordManagerWindow.reset();
+					g_MainWindow.build();
+					focus(g_MainWindow.record_manager);
 					g_RecordingsManager = false;
 				}
 				std::wstring record_path_u;
@@ -1147,49 +1263,49 @@ static inline ma_int32 _stdcall MINIAUDIO_IMPLEMENTATION wWinMain(HINSTANCE hIns
 				if (files.size() == 0) {
 					if (sound_events == MA_TRUE)		play_from_memory(Error_wav, false);
 					g_SpeechProvider.Speak("There are no files in \"" + record_path + "\".");
-					window_reset();
-					main_items_construct();
-					focus(record_manager);
+					g_RecordManagerWindow.reset();
+					g_MainWindow.build();
+					focus(g_MainWindow.record_manager);
 					g_RecordingsManager = false;
 				}
-				if ((key_down(VK_SPACE) && get_current_focus() == items_view_list) || is_pressed(play_button)) {
+				if ((key_down(VK_SPACE) && get_current_focus() == g_RecordManagerWindow.items_view_list) || is_pressed(g_RecordManagerWindow.play_button)) {
 					std::wstring record_path_u;
 					UnicodeConvert(record_path, record_path_u);
-					play(record_path_u + L"/" + get_focused_list_item_name(items_view_list));
-					if (get_current_focus() == play_button)focus(pause_button);
+					play(record_path_u + L"/" + get_focused_list_item_name(g_RecordManagerWindow.items_view_list));
+					if (get_current_focus() == g_RecordManagerWindow.play_button)focus(g_RecordManagerWindow.pause_button);
 				}
-				if (is_pressed(pause_button) and g_SoundActive) {
+				if (is_pressed(g_RecordManagerWindow.pause_button) and g_SoundActive) {
 					ma_sound_stop(&player);
-					if (get_current_focus() == pause_button)focus(play_button);
+					if (get_current_focus() == g_RecordManagerWindow.pause_button)focus(g_RecordManagerWindow.play_button);
 
 				}
-				if (is_pressed(stop_button) and g_SoundActive) {
+				if (is_pressed(g_RecordManagerWindow.stop_button) and g_SoundActive) {
 					ma_sound_seek_to_pcm_frame(&player, 0);
 					ma_sound_stop(&player);
 				}
-				if (key_pressed(VK_DELETE) or is_pressed(delete_button)) {
-					if (get_focused_list_item_name(items_view_list) == L"")continue;
+				if (key_pressed(VK_DELETE) or is_pressed(g_RecordManagerWindow.delete_button)) {
+					if (get_focused_list_item_name(g_RecordManagerWindow.items_view_list) == L"")continue;
 					wait(10);
-					int result = alert(L"FPWarning", L"Are you sure you want to delete the recording \"" + get_focused_list_item_name(items_view_list) + L"\"? It can no longer be restored.", MB_YESNO | MB_ICONEXCLAMATION);
+					int result = alert(L"FPWarning", L"Are you sure you want to delete the recording \"" + get_focused_list_item_name(g_RecordManagerWindow.items_view_list) + L"\"? It can no longer be restored.", MB_YESNO | MB_ICONEXCLAMATION);
 					if (result == IDNO)continue;
 					else if (result == IDYES)
 					{
 						std::wstring record_path_u;
 						UnicodeConvert(record_path, record_path_u);
-						std::wstring file = record_path_u + L"/" + get_focused_list_item_name(items_view_list);
+						std::wstring file = record_path_u + L"/" + get_focused_list_item_name(g_RecordManagerWindow.items_view_list);
 						if (g_SoundActive) {
 							ma_sound_uninit(&player);
 							g_SoundActive = false;
 						}
 						DeleteFile(file.c_str());
-						window_reset();
-						record_manager_items_construct();
+						g_RecordManagerWindow.reset();
+						g_RecordManagerWindow.build();
 					}
 				}
 			}
-			if (!g_Recording && (is_pressed(record_start) || hotkey_pressed(HOTKEY_STARTSTOP))) {
-				loopback_device = get_list_position(output_devices_list);
-				input_device = get_list_position(input_devices_list);
+			if (!g_Recording && (is_pressed(g_MainWindow.record_start) || hotkey_pressed(HOTKEY_STARTSTOP))) {
+				loopback_device = get_list_position(g_MainWindow.output_devices_list);
+				input_device = get_list_position(g_MainWindow.input_devices_list);
 				conf.write("General", "input-device", std::to_string(input_device));
 				conf.write("General", "loopback-device", std::to_string(loopback_device));
 				conf.save();
@@ -1203,17 +1319,17 @@ static inline ma_int32 _stdcall MINIAUDIO_IMPLEMENTATION wWinMain(HINSTANCE hIns
 
 					continue;
 				}
-				window_reset();
-				record_items_construct();
+				g_MainWindow.reset();
+				g_RecordingWindow.build();
 				rec.start();
 				g_Recording = true;
 				g_RecordingPaused = false;
 			}
-			if (g_Recording && (is_pressed(record_stop) || hotkey_pressed(HOTKEY_STARTSTOP))) {
+			if (g_Recording && (is_pressed(g_RecordingWindow.record_stop) || hotkey_pressed(HOTKEY_STARTSTOP))) {
 				rec.stop();
 				if (sound_events == MA_TRUE)play_from_memory(Stop_wav);
 				g_Recording = false;
-				window_reset();
+				g_RecordingWindow.reset();
 				if (audio_format == "jkm" or audio_format == "JKM") {
 					alert(L"FPInteractiveAudioConverter", L"JKM - Jigsaw Kompression Media V 99.54.2. This audio format will be in 2015, October 95 at 3 hours -19 minutes.", MB_ICONHAND);
 					g_Retcode = -256;
@@ -1239,24 +1355,25 @@ static inline ma_int32 _stdcall MINIAUDIO_IMPLEMENTATION wWinMain(HINSTANCE hIns
 					UnicodeConvert(rec.filename, recording_name_u);
 					DeleteFile(recording_name_u.c_str());
 				}
-				main_items_construct();
+				g_MainWindow.build();
+
 			}
-			if (g_Recording && (is_pressed(record_pause) || hotkey_pressed(HOTKEY_PAUSERESUME))) {
+			if (g_Recording && (is_pressed(g_RecordingWindow.record_pause) || hotkey_pressed(HOTKEY_PAUSERESUME))) {
 				if (!g_RecordingPaused) {
 					rec.pause();
 					if (sound_events == MA_TRUE)play_from_memory(Pause_wav, 9545);
 					g_RecordingPaused = true;
-					set_text(record_pause, L"&Resume recording");
+					set_text(g_RecordingWindow.record_pause, L"&Resume recording");
 				}
 				else if (g_RecordingPaused) {
 					if (sound_events == MA_TRUE)play_from_memory(Unpause_wav, 12221);
 					rec.resume();
 					g_RecordingPaused = false;
-					set_text(record_pause, L"&Pause recording");
+					set_text(g_RecordingWindow.record_pause, L"&Pause recording");
 				}
 				ma_sleep(100);
 			}
-			if (g_Recording && (is_pressed(record_restart) || hotkey_pressed(HOTKEY_RESTART))) {
+			if (g_Recording && (is_pressed(g_RecordingWindow.record_restart) || hotkey_pressed(HOTKEY_RESTART))) {
 				wait(10);
 				std::wstring recording_name_u;
 				UnicodeConvert(rec.filename, recording_name_u);
@@ -1269,7 +1386,7 @@ static inline ma_int32 _stdcall MINIAUDIO_IMPLEMENTATION wWinMain(HINSTANCE hIns
 				rec.start();
 				g_Recording = true;
 				g_RecordingPaused = false;
-				set_text(record_pause, L"&Pause recording");
+				set_text(g_RecordingWindow.record_pause, L"&Pause recording");
 				DeleteFile(recording_name_u.c_str());
 				if (sound_events == MA_TRUE)play_from_memory(Restart_wav);
 			}
@@ -1278,6 +1395,7 @@ static inline ma_int32 _stdcall MINIAUDIO_IMPLEMENTATION wWinMain(HINSTANCE hIns
 	catch (const std::exception& ex) {
 		std::wstring exception_u;
 		UnicodeConvert(ex.what(), exception_u);
+		if (sound_events == MA_TRUE)play_from_memory(Error_wav, false);
 		alert(L"FPRuntimeError", exception_u.c_str(), MB_ICONERROR);
 		g_Running = false;
 		g_Retcode = -100;
@@ -1294,3 +1412,44 @@ static inline ma_int32 _stdcall MINIAUDIO_IMPLEMENTATION wWinMain(HINSTANCE hIns
 	timeEndPeriod(1);
 	return g_Retcode; // Application exit
 }
+
+LONG WINAPI ExceptionHandler(EXCEPTION_POINTERS* exceptionInfo) {
+	std::stringstream ss;
+	ss << "Caught an access violation (segmentation fault)." << std::endl;
+
+	// Get the address where the exception occurred
+	ULONG_PTR faultingAddress = exceptionInfo->ExceptionRecord->ExceptionInformation[1];
+	ss << "Faulting address: " << faultingAddress << std::endl;
+
+	// Capture the stack trace
+	void* stack[100];
+	unsigned short frames;
+	SYMBOL_INFO* symbol;
+	HANDLE process = GetCurrentProcess();
+
+	SymInitialize(process, NULL, TRUE);
+	frames = CaptureStackBackTrace(0, 100, stack, NULL);
+
+	symbol = (SYMBOL_INFO*)calloc(sizeof(SYMBOL_INFO) + 256 * sizeof(char), 1);
+	symbol->MaxNameLen = 255;
+	symbol->SizeOfStruct = sizeof(SYMBOL_INFO);
+
+	for (unsigned short i = 0; i < frames; i++) {
+		SymFromAddr(process, (DWORD64)(stack[i]), 0, symbol);
+		ss << i << ": " << symbol->Name << " - 0x" << symbol->Address << std::endl;
+	}
+
+	free(symbol);
+	std::wstring str_u;
+	UnicodeConvert(ss.str(), str_u);
+	if (sound_events == MA_TRUE)play_from_memory(Error_wav, false);
+	alert(L"FPRuntimeError", str_u, MB_ICONERROR);
+	g_Retcode = -100;
+	g_Running = false;
+	timeEndPeriod(1);
+	exit(g_Retcode);// Force exit when the exception is thrown
+	return 0;
+}
+
+
+
