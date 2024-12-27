@@ -119,6 +119,7 @@ __declspec(allocate("CONFIG"))std::string audio_format = "wav";
 __declspec(allocate("CONFIG"))int input_device = 0;
 __declspec(allocate("CONFIG"))int loopback_device = 0;
 __declspec(allocate("CONFIG"))ma_bool32 sound_events = MA_TRUE;
+__declspec(allocate("CONFIG"))ma_bool32 make_stems = MA_FALSE;
 __declspec(allocate("CONFIG"))ma_format buffer_format = ma_format_s16;
 __declspec(allocate("CONFIG"))const ma_uint32 periods = 256;
 __declspec(allocate("CONFIG"))user_config conf("fp.ini");
@@ -513,7 +514,7 @@ void MA_API audio_recorder_callback(ma_device* pDevice, void* pOutput, const voi
 			}
 		}
 	}
-	if (g_CurrentOutputDevice.name == L"Not used") {
+	if ((g_LoopbackProcess && make_stems) || g_CurrentOutputDevice.name == L"Not used") {
 		void* pInputOut = (void*)pInput;
 		ma_uint64 frameCountToProcess = frameCount;
 		ma_uint64 frameCountOut = frameCount * 2;
@@ -540,7 +541,7 @@ void MA_API audio_recorder_callback_loopback(ma_device* pDevice, void* pOutput, 
 			}
 		}
 	}
-	if (g_CurrentInputDevice.name == L"Not used") {
+	if ((g_MicrophoneProcess && make_stems) || g_CurrentInputDevice.name == L"Not used") {
 		void* pInputOut = (void*)pInput;
 		ma_uint64 frameCountToProcess = frameCount;
 		ma_uint64 frameCountOut = frameCount * 2;
@@ -576,7 +577,7 @@ class MINIAUDIO_IMPLEMENTATION CAudioRecorder {
 	ma_device_config deviceConfig;
 	ma_device_config loopbackDeviceConfig;
 	ma_encoder_config encoderConfig;
-	ma_encoder encoder;
+	ma_encoder encoder[2];
 	ma_device recording_device;
 	ma_device loopback_device;
 public:
@@ -602,10 +603,22 @@ public:
 		std::wstring record_path_u;
 		UnicodeConvert(record_path, record_path_u);
 		CreateDirectory(record_path_u.c_str(), nullptr);
-		std::string file = record_path + "/" + get_now() + ".wav";
+		std::string file = record_path + "/" + get_now();
 		filename = file;
+
 		encoderConfig = ma_encoder_config_init(ma_encoding_format_wav, buffer_format, channels, sample_rate);
-		ma_result result = ma_encoder_init_file(file.c_str(), &encoderConfig, &encoder);
+		ma_result result = MA_SUCCESS;
+		if (make_stems) {
+			std::string stem;
+			stem = file + " Mic.wav";
+			result = ma_encoder_init_file(stem.c_str(), &encoderConfig, &encoder[0]);
+			stem = file + " Loopback.wav";
+			if (result == MA_SUCCESS)
+				result = ma_encoder_init_file(stem.c_str(), &encoderConfig, &encoder[1]);
+		}
+		else {
+			result = ma_encoder_init_file(std::string(file + ".wav").c_str(), &encoderConfig, &encoder[0]);
+		}
 		if (result != MA_SUCCESS) {
 			std::wstring file_u;
 			UnicodeConvert(file, file_u);
@@ -624,7 +637,7 @@ public:
 			deviceConfig.periodSizeInMilliseconds = buffer_size;
 			deviceConfig.periods = periods;
 			deviceConfig.dataCallback = audio_recorder_callback;
-			deviceConfig.pUserData = &encoder;
+			deviceConfig.pUserData = &encoder[0];
 			result = ma_device_init(NULL, &deviceConfig, &recording_device);
 			if (result != MA_SUCCESS) {
 				if (sound_events == MA_TRUE)		play_from_memory(Error_wav, false);
@@ -643,7 +656,7 @@ public:
 			loopbackDeviceConfig.sampleRate = sample_rate;
 			loopbackDeviceConfig.periodSizeInMilliseconds = buffer_size;
 			loopbackDeviceConfig.dataCallback = audio_recorder_callback_loopback;
-			loopbackDeviceConfig.pUserData = &encoder;
+			loopbackDeviceConfig.pUserData = make_stems ? &encoder[1] : &encoder[0];
 			ma_backend backends[] = {
 				ma_backend_wasapi
 			};
@@ -671,7 +684,9 @@ public:
 			g_LoopbackProcess = MA_FALSE;
 			ma_device_uninit(&loopback_device);
 		}
-		ma_encoder_uninit(&encoder);
+		if (make_stems)
+			ma_encoder_uninit(&encoder[1]);
+		ma_encoder_uninit(&encoder[0]);
 		ma_event_uninit(&g_RecordThreadEvent);
 		g_NullSamplesDestroyed = MA_FALSE;
 		ma_data_converter_uninit(&g_Converter, nullptr);
@@ -683,8 +698,8 @@ public:
 	}
 	void resume() {
 		thread_shutdown = false;
-		if (g_MicrophoneProcess == MA_TRUE && g_LoopbackProcess == MA_TRUE) {
-			std::thread t(recording_thread, &encoder);
+		if (!make_stems && g_MicrophoneProcess == MA_TRUE && g_LoopbackProcess == MA_TRUE) {
+			std::thread t(recording_thread, &encoder[0]);
 			t.detach();
 		}
 		paused = false;
@@ -1084,6 +1099,9 @@ signed int _stdcall MINIAUDIO_IMPLEMENTATION WINAPI wWinMain(HINSTANCE hInstance
 			loopback_device = std::stoi(oud);
 			std::string sevents = conf.read("General", "sound-events");
 			sound_events = std::stoi(sevents);
+			std::string mstems = conf.read("General", "make-stems");
+			make_stems = std::stoi(mstems);
+
 			std::string sformat = conf.read("General", "sample-format");
 			ma_bool32 parse_result = try_parse_format(sformat.c_str(), &buffer_format);
 			if (parse_result == MA_FALSE) {
@@ -1171,6 +1189,8 @@ signed int _stdcall MINIAUDIO_IMPLEMENTATION WINAPI wWinMain(HINSTANCE hInstance
 		conf.write("General", "input-device", std::to_string(input_device));
 		conf.write("General", "loopback-device", std::to_string(loopback_device));
 		conf.write("General", "sound-events", std::to_string(sound_events));
+		conf.write("General", "make-stems", std::to_string(make_stems));
+
 		conf.write("General", "sample-format", string(ma_format_to_string(buffer_format)));
 		conf.write("General", "hotkey-start-stop", hotkey_start_stop);
 		conf.write("General", "hotkey-pause-resume", hotkey_pause_resume);
