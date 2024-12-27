@@ -73,6 +73,9 @@ Specifies the loopback device for audio recording; "0" indicates the default loo
 - **sound-events = 1**
 Boolean value that determines whether sound events will be played during recording.
 
+- **make-stems = 0**
+Boolean value that determines whether separate loopback and microphone signals by two files.
+
 - **sample-format = s16**
 Specifies the sample format for audio recording (set to 16-bit signed integer).
 
