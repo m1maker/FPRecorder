@@ -44,9 +44,11 @@
 #include <dbghelp.h>
 
 using namespace gui;
-const int HOTKEY_STARTSTOP = 1;
-const int HOTKEY_PAUSERESUME = 2;
-const int HOTKEY_RESTART = 3;
+enum EHotKey {
+	HOTKEY_STARTSTOP = 1,
+	HOTKEY_PAUSERESUME = 2,
+	HOTKEY_RESTART = 3
+};
 int g_Retcode = 0;
 bool g_Running = false;
 
@@ -145,8 +147,6 @@ public:
 LONG WINAPI ExceptionHandler(EXCEPTION_POINTERS* exceptionInfo);
 
 
-
-
 struct preset {
 	std::string name;
 	std::string command;
@@ -172,7 +172,6 @@ __declspec(allocate("CONFIG"))std::string hotkey_pause_resume = "Windows+Shift+F
 __declspec(allocate("CONFIG"))std::string hotkey_restart = "Windows+Shift+F3";
 __declspec(allocate("CONFIG"))const preset g_DefaultPreset = { "Default", "ffmpeg.exe -i %I %i.%f" };
 __declspec(allocate("CONFIG"))std::string current_preset_name = "Default";
-
 
 class CUIAutomationSpeech {
 	IUIAutomation* pAutomation = nullptr;
@@ -404,7 +403,7 @@ public:
 		return false;
 	}
 
-	bool Play(std::string filename) {
+	bool Play(const std::string& filename) {
 		std::wstring filename_u;
 		CStringUtils::UnicodeConvert(filename, filename_u);
 		return Play(filename_u);
@@ -577,89 +576,23 @@ MA_API float* mix_f32(float* input1, float* input2, ma_uint32 frameCountFirst, m
 	}
 	return result;
 }
+
+enum EProcess : uint8_t {
+	PROCESS_NONE = 0,
+	PROCESS_MICROPHONE = 1 << 0,
+	PROCESS_LOOPBACK = 1 << 2
+};
+
+static uint8_t g_Process = PROCESS_NONE;
 static float* loopback_buffer = nullptr;
 static float* microphone_buffer = nullptr;
-ma_uint32 loopback_frames;
-ma_uint32 microphone_frames;
+static ma_uint32 loopback_frames;
+static ma_uint32 microphone_frames;
 static ma_event g_RecordThreadEvent;
-ma_bool8 g_LoopbackProcess = MA_FALSE;
-ma_bool8 g_MicrophoneProcess = MA_FALSE;
-bool thread_shutdown = false;
-bool paused = false;
-ma_bool8 g_NullSamplesDestroyed = MA_FALSE;
-ma_data_converter g_Converter;
-void MA_API audio_recorder_callback(ma_device* pDevice, void* pOutput, const void* pInput, ma_uint32 frameCount)
-{
-	if (paused || !g_MicrophoneProcess)return;
-	ma_encoder* encoder = reinterpret_cast<ma_encoder*>(pDevice->pUserData);
-	if (g_NullSamplesDestroyed == MA_FALSE) {
-		if (buffer_format != ma_format_f32) {
-			float* pInput64 = (float*)(pInput);
-			for (ma_uint32 i = 0; i < frameCount; i++) {
-				if (pInput64[i] == 0)return;
-				else g_NullSamplesDestroyed = MA_TRUE;
-			}
-		}
-	}
-	if ((g_LoopbackProcess && make_stems) || g_CurrentOutputDevice.name == L"Not used") {
-		void* pInputOut = (void*)pInput;
-		ma_uint64 frameCountToProcess = frameCount;
-		ma_uint64 frameCountOut = frameCount * 2;
-		ma_data_converter_process_pcm_frames__format_only(&g_Converter, pInput, &frameCountToProcess, pInputOut, &frameCountOut);
-		ma_encoder_write_pcm_frames(encoder, pInputOut, frameCountOut, nullptr);
-	}
-	else {
-		microphone_buffer = (float*)pInput;
-		microphone_frames = frameCount;
-	}
-	(void)pOutput;
-}
-void MA_API audio_recorder_callback_loopback(ma_device* pDevice, void* pOutput, const void* pInput, ma_uint32 frameCount) {
-	if (paused)return;
-	if (!g_LoopbackProcess)return;
-	ma_encoder* encoder = reinterpret_cast<ma_encoder*>(pDevice->pUserData);
-
-	if (g_NullSamplesDestroyed == MA_FALSE) {
-		if (buffer_format != ma_format_f32) {
-			float* pInput64 = (float*)(pInput);
-			for (ma_uint32 i = 0; i < frameCount; i++) {
-				if (pInput64[i] == 0)return;
-				else g_NullSamplesDestroyed = MA_TRUE;
-			}
-		}
-	}
-	if ((g_MicrophoneProcess && make_stems) || g_CurrentInputDevice.name == L"Not used") {
-		void* pInputOut = (void*)pInput;
-		ma_uint64 frameCountToProcess = frameCount;
-		ma_uint64 frameCountOut = frameCount * 2;
-		ma_data_converter_process_pcm_frames__format_only(&g_Converter, pInput, &frameCountToProcess, pInputOut, &frameCountOut);
-		ma_encoder_write_pcm_frames(encoder, pInputOut, frameCountOut, nullptr);
-	}
-	else {
-		loopback_buffer = (float*)pInput;
-		loopback_frames = frameCount;
-		ma_event_signal(&g_RecordThreadEvent);
-	}
-	(void)pOutput;
-}
-
-static void recording_thread(ma_encoder* encoder) {
-	while (!thread_shutdown) {
-		ma_event_wait(&g_RecordThreadEvent);
-		if (microphone_buffer != nullptr and loopback_buffer != nullptr && g_MicrophoneProcess && g_LoopbackProcess) {
-			void* result = nullptr;
-			result = mix_f32((float*)microphone_buffer, (float*)loopback_buffer, microphone_frames, loopback_frames);
-			void* pInputOut = (void*)result;
-			ma_uint64 frameCountToProcess = microphone_frames;
-			ma_uint64 frameCountOut = microphone_frames * 2;
-			ma_data_converter_process_pcm_frames__format_only(&g_Converter, result, &frameCountToProcess, pInputOut, &frameCountOut);
-			ma_encoder_write_pcm_frames(encoder, pInputOut, frameCountOut, nullptr);
-			microphone_frames = 0;
-			loopback_frames = 0;
-		}
-	}
-}
-
+static bool thread_shutdown = false;
+static bool paused = false;
+static ma_bool8 g_NullSamplesDestroyed = MA_FALSE;
+static ma_data_converter g_Converter;
 class MINIAUDIO_IMPLEMENTATION CAudioRecorder {
 	ma_device_config deviceConfig;
 	ma_device_config loopbackDeviceConfig;
@@ -674,6 +607,78 @@ public:
 		if (g_Recording)
 			this->stop();
 	}
+	static void MicrophoneCallback(ma_device* pDevice, void* pOutput, const void* pInput, ma_uint32 frameCount)
+	{
+		if (paused || !g_Process & PROCESS_MICROPHONE)return;
+		ma_encoder* encoder = reinterpret_cast<ma_encoder*>(pDevice->pUserData);
+		if (g_NullSamplesDestroyed == MA_FALSE) {
+			if (buffer_format != ma_format_f32) {
+				float* pInput64 = (float*)(pInput);
+				for (ma_uint32 i = 0; i < frameCount; i++) {
+					if (pInput64[i] == 0)return;
+					else g_NullSamplesDestroyed = MA_TRUE;
+				}
+			}
+		}
+		if ((g_Process & PROCESS_LOOPBACK && make_stems) || g_CurrentOutputDevice.name == L"Not used") {
+			void* pInputOut = (void*)pInput;
+			ma_uint64 frameCountToProcess = frameCount;
+			ma_uint64 frameCountOut = frameCount * 2;
+			ma_data_converter_process_pcm_frames__format_only(&g_Converter, pInput, &frameCountToProcess, pInputOut, &frameCountOut);
+			ma_encoder_write_pcm_frames(encoder, pInputOut, frameCountOut, nullptr);
+		}
+		else {
+			microphone_buffer = (float*)pInput;
+			microphone_frames = frameCount;
+		}
+		(void)pOutput;
+	}
+	static void LoopbackCallback(ma_device* pDevice, void* pOutput, const void* pInput, ma_uint32 frameCount) {
+		if (paused)return;
+		if (!g_Process & PROCESS_LOOPBACK)return;
+		ma_encoder* encoder = reinterpret_cast<ma_encoder*>(pDevice->pUserData);
+
+		if (g_NullSamplesDestroyed == MA_FALSE) {
+			if (buffer_format != ma_format_f32) {
+				float* pInput64 = (float*)(pInput);
+				for (ma_uint32 i = 0; i < frameCount; i++) {
+					if (pInput64[i] == 0)return;
+					else g_NullSamplesDestroyed = MA_TRUE;
+				}
+			}
+		}
+		if ((g_Process & PROCESS_MICROPHONE && make_stems) || g_CurrentInputDevice.name == L"Not used") {
+			void* pInputOut = (void*)pInput;
+			ma_uint64 frameCountToProcess = frameCount;
+			ma_uint64 frameCountOut = frameCount * 2;
+			ma_data_converter_process_pcm_frames__format_only(&g_Converter, pInput, &frameCountToProcess, pInputOut, &frameCountOut);
+			ma_encoder_write_pcm_frames(encoder, pInputOut, frameCountOut, nullptr);
+		}
+		else {
+			loopback_buffer = (float*)pInput;
+			loopback_frames = frameCount;
+			ma_event_signal(&g_RecordThreadEvent);
+		}
+		(void)pOutput;
+	}
+
+	static void MixingThread(ma_encoder* encoder) {
+		while (!thread_shutdown && g_Running) {
+			ma_event_wait(&g_RecordThreadEvent);
+			if (microphone_buffer != nullptr and loopback_buffer != nullptr) {
+				void* result = nullptr;
+				result = mix_f32((float*)microphone_buffer, (float*)loopback_buffer, microphone_frames, loopback_frames);
+				void* pInputOut = (void*)result;
+				ma_uint64 frameCountToProcess = microphone_frames;
+				ma_uint64 frameCountOut = microphone_frames * 2;
+				ma_data_converter_process_pcm_frames__format_only(&g_Converter, result, &frameCountToProcess, pInputOut, &frameCountOut);
+				ma_encoder_write_pcm_frames(encoder, pInputOut, frameCountOut, nullptr);
+				microphone_frames = 0;
+				loopback_frames = 0;
+			}
+		}
+	}
+
 	void start() {
 		loopback_buffer = nullptr;
 		microphone_buffer = nullptr;
@@ -723,7 +728,7 @@ public:
 			deviceConfig.sampleRate = sample_rate;
 			deviceConfig.periodSizeInMilliseconds = buffer_size;
 			deviceConfig.periods = periods;
-			deviceConfig.dataCallback = audio_recorder_callback;
+			deviceConfig.dataCallback = CAudioRecorder::MicrophoneCallback;
 			deviceConfig.pUserData = &encoder[0];
 			result = ma_device_init(NULL, &deviceConfig, &recording_device);
 			if (result != MA_SUCCESS) {
@@ -733,7 +738,7 @@ public:
 				g_Running = false;
 			}
 			ma_device_start(&recording_device);
-			g_MicrophoneProcess = MA_TRUE;
+			g_Process |= PROCESS_MICROPHONE;
 		}
 		if (g_CurrentOutputDevice.name != L"Not used") {
 			loopbackDeviceConfig = ma_device_config_init(ma_device_type_loopback);
@@ -742,7 +747,7 @@ public:
 			loopbackDeviceConfig.capture.channels = channels;
 			loopbackDeviceConfig.sampleRate = sample_rate;
 			loopbackDeviceConfig.periodSizeInMilliseconds = buffer_size;
-			loopbackDeviceConfig.dataCallback = audio_recorder_callback_loopback;
+			loopbackDeviceConfig.dataCallback = CAudioRecorder::LoopbackCallback;
 			loopbackDeviceConfig.pUserData = make_stems ? &encoder[1] : &encoder[0];
 			ma_backend backends[] = {
 				ma_backend_wasapi
@@ -756,19 +761,19 @@ public:
 				g_Running = false;
 			}
 			ma_device_start(&loopback_device);
-			g_LoopbackProcess = MA_TRUE;
+			g_Process |= PROCESS_LOOPBACK;
 		}
 		this->resume();
 	}
 	void stop() {
-		if (g_MicrophoneProcess) {
+		if (g_Process & PROCESS_MICROPHONE) {
 			ma_event_signal(&g_RecordThreadEvent);
 			ma_device_uninit(&recording_device);
-			g_MicrophoneProcess = MA_FALSE;
+			g_Process &= ~PROCESS_MICROPHONE;
 		}
-		if (g_LoopbackProcess) {
+		if (g_Process & PROCESS_LOOPBACK) {
 			thread_shutdown = true;
-			g_LoopbackProcess = MA_FALSE;
+			g_Process &= ~PROCESS_LOOPBACK;
 			ma_device_uninit(&loopback_device);
 		}
 		if (make_stems)
@@ -785,8 +790,8 @@ public:
 	}
 	void resume() {
 		thread_shutdown = false;
-		if (!make_stems && g_MicrophoneProcess == MA_TRUE && g_LoopbackProcess == MA_TRUE) {
-			std::thread t(recording_thread, &encoder[0]);
+		if (!make_stems && g_Process & PROCESS_MICROPHONE && g_Process & PROCESS_LOOPBACK) {
+			std::thread t(CAudioRecorder::MixingThread, &encoder[0]);
 			t.detach();
 		}
 		paused = false;
@@ -868,6 +873,7 @@ static HWND window = nullptr;
 
 class IWindow {
 	int id;
+	HWND m_Parent = nullptr;
 public:
 	std::vector<HWND> items;
 	void reset() {
@@ -888,8 +894,9 @@ public:
 		items.erase(items.begin() + index);
 	}
 
-	IWindow() {
+	IWindow(HWND parent = window) {
 		this->reset();
+		this->m_Parent = parent;
 		g_Windows.push_back(this);
 		this->id = g_Windows.size() - 1;
 	}
@@ -897,6 +904,9 @@ public:
 		this->reset();
 	}
 
+	operator HWND() {
+		return m_Parent;
+	}
 	virtual void build() {}
 
 	void auto_size()
