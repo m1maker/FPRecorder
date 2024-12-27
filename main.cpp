@@ -130,7 +130,6 @@ __declspec(allocate("CONFIG"))std::string current_preset_name = "Default";
 
 
 class UIAutomationSpeech {
-private:
 	IUIAutomation* pAutomation = nullptr;
 	IUIAutomationCondition* pCondition = nullptr;
 	VARIANT varName;
@@ -494,8 +493,7 @@ static float* loopback_buffer = nullptr;
 static float* microphone_buffer = nullptr;
 ma_uint32 loopback_frames;
 ma_uint32 microphone_frames;
-static ma_event loopback_event;
-static ma_event microphone_event;
+static ma_event g_RecordThreadEvent;
 ma_bool8 g_LoopbackProcess = MA_FALSE;
 ma_bool8 g_MicrophoneProcess = MA_FALSE;
 bool thread_shutdown = false;
@@ -525,7 +523,6 @@ void MA_API audio_recorder_callback(ma_device* pDevice, void* pOutput, const voi
 	else {
 		microphone_buffer = (float*)pInput;
 		microphone_frames = frameCount;
-		ma_event_signal(&microphone_event);
 	}
 	(void)pOutput;
 }
@@ -553,15 +550,14 @@ void MA_API audio_recorder_callback_loopback(ma_device* pDevice, void* pOutput, 
 	else {
 		loopback_buffer = (float*)pInput;
 		loopback_frames = frameCount;
-		ma_event_signal(&loopback_event);
+		ma_event_signal(&g_RecordThreadEvent);
 	}
 	(void)pOutput;
 }
 
 static void recording_thread(ma_encoder* encoder) {
 	while (!thread_shutdown) {
-		ma_event_wait(&microphone_event);
-		ma_event_wait(&loopback_event);
+		ma_event_wait(&g_RecordThreadEvent);
 		if (microphone_buffer != nullptr and loopback_buffer != nullptr && g_MicrophoneProcess && g_LoopbackProcess) {
 			void* result = nullptr;
 			result = mix_f32((float*)microphone_buffer, (float*)loopback_buffer, microphone_frames, loopback_frames);
@@ -577,7 +573,6 @@ static void recording_thread(ma_encoder* encoder) {
 }
 
 class MINIAUDIO_IMPLEMENTATION CAudioRecorder {
-private:
 	ma_device_config deviceConfig;
 	ma_device_config loopbackDeviceConfig;
 	ma_encoder_config encoderConfig;
@@ -603,8 +598,7 @@ public:
 			g_Retcode = -3;
 			g_Running = false;
 		}
-		ma_event_init(&loopback_event);
-		ma_event_init(&microphone_event);
+		ma_event_init(&g_RecordThreadEvent);
 		std::wstring record_path_u;
 		UnicodeConvert(record_path, record_path_u);
 		CreateDirectory(record_path_u.c_str(), nullptr);
@@ -646,10 +640,6 @@ public:
 			loopbackDeviceConfig.capture.pDeviceID = &g_CurrentOutputDevice.id;;
 			loopbackDeviceConfig.capture.format = ma_format_f32;
 			loopbackDeviceConfig.capture.channels = channels;
-			application app;
-			std::vector<application> apps = get_tasklist();;
-			for (unsigned int i = 0; i < apps.size(); i++) {
-			}
 			loopbackDeviceConfig.sampleRate = sample_rate;
 			loopbackDeviceConfig.periodSizeInMilliseconds = buffer_size;
 			loopbackDeviceConfig.dataCallback = audio_recorder_callback_loopback;
@@ -672,19 +662,17 @@ public:
 	}
 	void stop() {
 		if (g_MicrophoneProcess) {
-			ma_event_signal(&microphone_event);
+			ma_event_signal(&g_RecordThreadEvent);
 			ma_device_uninit(&recording_device);
 			g_MicrophoneProcess = MA_FALSE;
 		}
 		if (g_LoopbackProcess) {
 			thread_shutdown = true;
 			g_LoopbackProcess = MA_FALSE;
-			ma_event_signal(&loopback_event);
 			ma_device_uninit(&loopback_device);
 		}
 		ma_encoder_uninit(&encoder);
-		ma_event_uninit(&loopback_event);
-		ma_event_uninit(&microphone_event);
+		ma_event_uninit(&g_RecordThreadEvent);
 		g_NullSamplesDestroyed = MA_FALSE;
 		ma_data_converter_uninit(&g_Converter, nullptr);
 	}
@@ -789,7 +777,7 @@ public:
 		items.clear();
 	}
 
-	int push(HWND window) {
+	size_t push(HWND window) {
 		items.push_back(window);
 		return items.size() - 1;
 	}
@@ -809,7 +797,7 @@ public:
 		this->reset();
 	}
 
-	virtual void build() = 0;
+	virtual void build() {}
 
 	void auto_size()
 	{
@@ -852,7 +840,7 @@ static void window_reset() {
 	g_Windows.clear();
 }
 
-const std::wstring version = L"0.0.1";
+const std::wstring version = L"0.0.1 Alpha";
 static CAudioRecorder rec;
 
 
@@ -1014,7 +1002,7 @@ public:
 	HWND hotkey_pause_resume = nullptr;
 	HWND hotkey_restart = nullptr;
 	HWND current_preset = nullptr;
-
+	void build() override {}
 
 };
 
@@ -1023,7 +1011,7 @@ public:
 static CMainWindow g_MainWindow;
 static CRecordManagerWindow g_RecordManagerWindow;
 static CRecordingWindow g_RecordingWindow;
-
+static CSettingsWindow g_SettingsWindow;
 
 
 
@@ -1063,7 +1051,7 @@ std::wstring WINAPI get_exe() {
 	return std::wstring(pathBuf.begin(), pathBuf.end());
 }
 
-static inline signed int _stdcall MINIAUDIO_IMPLEMENTATION WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, wchar_t* lpCmdLine, ma_int32       nShowCmd) {
+signed int _stdcall MINIAUDIO_IMPLEMENTATION WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, wchar_t* lpCmdLine, ma_int32       nShowCmd) {
 	g_Running = true;
 	SetUnhandledExceptionFilter(ExceptionHandler);
 	timeBeginPeriod(1);
@@ -1213,7 +1201,7 @@ static inline signed int _stdcall MINIAUDIO_IMPLEMENTATION WINAPI wWinMain(HINST
 		g_MainWindow.build();
 		presets.push_back(g_DefaultPreset);
 		while (g_Running) {
-			wait(1);
+			wait(5);
 			update_window(window);
 			// Avoid invalid hotkey presses not in recording mode.
 			if (!g_Recording) {
