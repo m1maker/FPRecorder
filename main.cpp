@@ -1153,7 +1153,7 @@ std::wstring WINAPI get_exe() {
 
 signed int _stdcall MINIAUDIO_IMPLEMENTATION WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, wchar_t* lpCmdLine, ma_int32       nShowCmd) {
 	g_Running = true;
-	//SetUnhandledExceptionFilter(ExceptionHandler);
+	SetUnhandledExceptionFilter(ExceptionHandler);
 	timeBeginPeriod(1);
 	DWORD kmod = -1;
 	int kcode = -1;
