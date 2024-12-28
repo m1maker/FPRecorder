@@ -350,7 +350,7 @@ static std::vector<std::wstring> WINAPI get_files(std::wstring path) {
 			}
 		}
 	}
-	catch (const std::exception& exc) {
+	catch (...) {
 		return files;
 	}
 
@@ -429,7 +429,7 @@ public:
 			if (result == MA_SUCCESS)m_SoundActive = true;
 			if (result == MA_SUCCESS)ma_sound_start(&player);
 			if (wait) {
-				while (ma_sound_is_playing(&player) == MA_TRUE) {
+				while (ma_sound_is_playing(&player)) {
 					gui::wait(5);
 				}
 			}
@@ -635,7 +635,7 @@ public:
 	}
 	static void LoopbackCallback(ma_device* pDevice, void* pOutput, const void* pInput, ma_uint32 frameCount) {
 		if (paused)return;
-		if (!g_Process & PROCESS_LOOPBACK)return;
+		if ((g_Process & PROCESS_LOOPBACK) != PROCESS_LOOPBACK)return;
 		ma_encoder* encoder = reinterpret_cast<ma_encoder*>(pDevice->pUserData);
 
 		if (g_NullSamplesDestroyed == MA_FALSE) {
@@ -714,7 +714,7 @@ public:
 		if (result != MA_SUCCESS) {
 			std::wstring file_u;
 			CStringUtils::UnicodeConvert(file, file_u);
-			if (sound_events == MA_TRUE)		g_SoundStream.PlayFromMemory(Error_wav, false);
+			if (sound_events)		g_SoundStream.PlayFromMemory(Error_wav, false);
 			alert(L"FPEncoderInitializerError", L"Error initializing audio encoder for file \"" + file_u + L"\" with retcode " + std::to_wstring(result) + L".", MB_ICONERROR);
 			g_Retcode = result;
 			g_Running = false;
@@ -732,7 +732,7 @@ public:
 			deviceConfig.pUserData = &encoder[0];
 			result = ma_device_init(NULL, &deviceConfig, &recording_device);
 			if (result != MA_SUCCESS) {
-				if (sound_events == MA_TRUE)		g_SoundStream.PlayFromMemory(Error_wav, false);
+				if (sound_events)		g_SoundStream.PlayFromMemory(Error_wav, false);
 				alert(L"FPAudioDeviceInitializerError", L"Error initializing audio device for \"" + g_CurrentInputDevice.name + L"\" with retcode " + std::to_wstring(result) + L".", MB_ICONERROR);
 				g_Retcode = result;
 				g_Running = false;
@@ -755,7 +755,7 @@ public:
 
 
 			result = ma_device_init_ex(backends, sizeof(backends) / sizeof(backends[0]), NULL, &loopbackDeviceConfig, &loopback_device);			if (result != MA_SUCCESS) {
-				if (sound_events == MA_TRUE)		g_SoundStream.PlayFromMemory(Error_wav, false);
+				if (sound_events)		g_SoundStream.PlayFromMemory(Error_wav, false);
 				alert(L"FPAudioDeviceInitializerError", L"Error initializing audio device for \"" + g_CurrentOutputDevice.name + L"\" with retcode " + std::to_wstring(result) + L".", MB_ICONERROR);
 				g_Retcode = result;
 				g_Running = false;
@@ -872,7 +872,7 @@ static HWND window = nullptr;
 
 
 class IWindow {
-	int id;
+	size_t id;
 	HWND m_Parent = nullptr;
 public:
 	std::vector<HWND> items;
@@ -1149,19 +1149,14 @@ static LRESULT CALLBACK DialogProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
 	return false;
 }
 std::wstring WINAPI get_exe() {
-	vector<wchar_t> pathBuf;
-	DWORD copied = 0;
-	do {
-		pathBuf.resize(pathBuf.size() + MAX_PATH);
-		copied = GetModuleFileName(0, &pathBuf.at(0), pathBuf.size());
-	} while (copied >= pathBuf.size());
-
-	pathBuf.resize(copied);
-
-	return std::wstring(pathBuf.begin(), pathBuf.end());
+	wchar_t* filename = new wchar_t[500];
+	GetModuleFileNameW(nullptr, filename, 500);
+	std::wstring result(filename);
+	delete[] filename;
+	return result;
 }
 
-signed int _stdcall MINIAUDIO_IMPLEMENTATION WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, wchar_t* lpCmdLine, ma_int32       nShowCmd) {
+int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, wchar_t* lpCmdLine, ma_int32       nShowCmd) {
 	g_Running = true;
 	SetUnhandledExceptionFilter(ExceptionHandler);
 	timeBeginPeriod(1);
@@ -1329,7 +1324,7 @@ signed int _stdcall MINIAUDIO_IMPLEMENTATION WINAPI wWinMain(HINSTANCE hInstance
 			if (gui::try_close) {
 				gui::try_close = false;
 				if (g_Recording) {
-					if (sound_events == MA_TRUE)		g_SoundStream.PlayFromMemory(Error_wav, false);
+					if (sound_events)		g_SoundStream.PlayFromMemory(Error_wav, false);
 					g_SpeechProvider.Speak("Unable to exit, while recording.");
 					continue;
 				}
@@ -1345,7 +1340,7 @@ signed int _stdcall MINIAUDIO_IMPLEMENTATION WINAPI wWinMain(HINSTANCE hInstance
 				conf.save();
 				g_MainWindow.reset();
 				g_RecordManagerWindow.build();
-				if (sound_events == MA_TRUE)g_SoundStream.PlayFromMemory(Openmanager_wav, 20673);
+				if (sound_events)g_SoundStream.PlayFromMemory(Openmanager_wav);
 				g_RecordingsManager = true;
 			}
 			if (g_RecordingsManager) {
@@ -1361,7 +1356,7 @@ signed int _stdcall MINIAUDIO_IMPLEMENTATION WINAPI wWinMain(HINSTANCE hInstance
 				CStringUtils::UnicodeConvert(record_path, record_path_u);
 				std::vector<wstring> files = get_files(record_path_u);
 				if (files.size() == 0) {
-					if (sound_events == MA_TRUE)		g_SoundStream.PlayFromMemory(Error_wav, false);
+					if (sound_events)		g_SoundStream.PlayFromMemory(Error_wav, false);
 					g_SpeechProvider.Speak("There are no files in \"" + record_path + "\".");
 					g_RecordManagerWindow.reset();
 					g_MainWindow.build();
@@ -1405,13 +1400,13 @@ signed int _stdcall MINIAUDIO_IMPLEMENTATION WINAPI wWinMain(HINSTANCE hInstance
 				conf.write("General", "input-device", std::to_string(input_device));
 				conf.write("General", "loopback-device", std::to_string(loopback_device));
 				conf.save();
-				if (sound_events == MA_TRUE)g_SoundStream.PlayFromMemory(Start_wav);
+				if (sound_events)g_SoundStream.PlayFromMemory(Start_wav);
 				g_CurrentInputDevice = in_audio_devices[input_device];
 				g_CurrentOutputDevice = out_audio_devices[loopback_device];
 				if (g_CurrentInputDevice.name == L"Not used" && g_CurrentOutputDevice.name == L"Not used") {
-					if (sound_events == MA_TRUE)g_SoundStream.PlayFromMemory(Error_wav);
+					if (sound_events)g_SoundStream.PlayFromMemory(Error_wav);
 					g_SpeechProvider.Speak("Can't record silence", true);
-					if (sound_events == MA_TRUE)g_SoundStream.PlayFromMemory(Stop_wav);
+					if (sound_events)g_SoundStream.PlayFromMemory(Stop_wav);
 
 					continue;
 				}
@@ -1423,7 +1418,7 @@ signed int _stdcall MINIAUDIO_IMPLEMENTATION WINAPI wWinMain(HINSTANCE hInstance
 			}
 			if (g_Recording && (is_pressed(g_RecordingWindow.record_stop) || hotkey_pressed(HOTKEY_STARTSTOP))) {
 				rec.stop();
-				if (sound_events == MA_TRUE)g_SoundStream.PlayFromMemory(Stop_wav);
+				if (sound_events)g_SoundStream.PlayFromMemory(Stop_wav);
 				g_Recording = false;
 				g_RecordingWindow.reset();
 				if (audio_format == CStringUtils::ToLowerCase("jkm")) {
@@ -1442,7 +1437,7 @@ signed int _stdcall MINIAUDIO_IMPLEMENTATION WINAPI wWinMain(HINSTANCE hInstance
 					CStringUtils::Replace(cmd, "%f", audio_format, true);
 					int result = ExecSystemCmd(cmd, output);
 					if (result != 0) {
-						if (sound_events == MA_TRUE)g_SoundStream.PlayFromMemory(Error_wav, false);
+						if (sound_events)g_SoundStream.PlayFromMemory(Error_wav, false);
 						wstring output_u;
 						CStringUtils::UnicodeConvert(output, output_u);
 						alert(L"FPError", L"Process exit failure!\nRetcode: " + std::to_wstring(result) + L"\nOutput: \"" + output_u + L"\".", MB_ICONERROR);
@@ -1457,12 +1452,12 @@ signed int _stdcall MINIAUDIO_IMPLEMENTATION WINAPI wWinMain(HINSTANCE hInstance
 			if (g_Recording && (is_pressed(g_RecordingWindow.record_pause) || hotkey_pressed(HOTKEY_PAUSERESUME))) {
 				if (!g_RecordingPaused) {
 					rec.pause();
-					if (sound_events == MA_TRUE)g_SoundStream.PlayFromMemory(Pause_wav, 9545);
+					if (sound_events)g_SoundStream.PlayFromMemory(Pause_wav);
 					g_RecordingPaused = true;
 					set_text(g_RecordingWindow.record_pause, L"&Resume recording");
 				}
 				else if (g_RecordingPaused) {
-					if (sound_events == MA_TRUE)g_SoundStream.PlayFromMemory(Unpause_wav, 12221);
+					if (sound_events)g_SoundStream.PlayFromMemory(Unpause_wav);
 					rec.resume();
 					g_RecordingPaused = false;
 					set_text(g_RecordingWindow.record_pause, L"&Pause recording");
@@ -1484,14 +1479,14 @@ signed int _stdcall MINIAUDIO_IMPLEMENTATION WINAPI wWinMain(HINSTANCE hInstance
 				g_RecordingPaused = false;
 				set_text(g_RecordingWindow.record_pause, L"&Pause recording");
 				DeleteFile(recording_name_u.c_str());
-				if (sound_events == MA_TRUE)g_SoundStream.PlayFromMemory(Restart_wav);
+				if (sound_events)g_SoundStream.PlayFromMemory(Restart_wav);
 			}
 		}
 	}
 	catch (const std::exception& ex) {
 		std::wstring exception_u;
 		CStringUtils::UnicodeConvert(ex.what(), exception_u);
-		if (sound_events == MA_TRUE)g_SoundStream.PlayFromMemory(Error_wav, false);
+		if (sound_events)g_SoundStream.PlayFromMemory(Error_wav, false);
 		alert(L"FPRuntimeError", exception_u.c_str(), MB_ICONERROR);
 		g_Running = false;
 		g_Retcode = -100;
@@ -1538,7 +1533,7 @@ LONG WINAPI ExceptionHandler(EXCEPTION_POINTERS* exceptionInfo) {
 	free(symbol);
 	std::wstring str_u;
 	CStringUtils::UnicodeConvert(ss.str(), str_u);
-	if (sound_events == MA_TRUE)g_SoundStream.PlayFromMemory(Error_wav, false);
+	if (sound_events)g_SoundStream.PlayFromMemory(Error_wav, false);
 	alert(L"FPRuntimeError", str_u, MB_ICONERROR);
 	g_Retcode = -100;
 	g_Running = false;
