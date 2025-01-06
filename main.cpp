@@ -140,9 +140,28 @@ public:
 		return array;
 	}
 
-
-
 };
+
+
+
+
+
+static bool ParseCommandLineOptions(const wchar_t* lpCmdLine, std::vector<std::string>& options, std::vector<std::string>& values) {
+	std::string str;
+	CStringUtils::UnicodeConvert(lpCmdLine, str);
+	std::vector<std::string> parsed = CStringUtils::Split(" ", str);
+	if (parsed.empty()) return false;
+	for (std::string& arg : parsed) {
+		if (arg[0] == '-' || arg[0] == '/') {
+			arg.erase(arg.begin() + 0);
+			options.push_back(arg);
+		}
+		else {
+			values.push_back(arg);
+		}
+	}
+	return true;
+}
 
 LONG WINAPI ExceptionHandler(EXCEPTION_POINTERS* exceptionInfo);
 
@@ -297,6 +316,7 @@ static int ExecSystemCmd(const std::string& str, std::string& out)
 		// Wait for a while to allow the process to work
 		YieldProcessor();
 		wait(5);
+		void;
 		DWORD ret = WaitForSingleObject(pi.hProcess, 50);
 
 		// Read from the stdout if there is any data
@@ -356,6 +376,9 @@ static std::vector<std::wstring> WINAPI get_files(std::wstring path) {
 
 	return files;
 }
+
+
+
 
 class CSoundStream {
 	ma_engine mixer;
@@ -512,6 +535,7 @@ MA_API const char* ma_format_to_string(ma_format format) {
 	default:
 		return NULL;
 	}
+	return NULL;
 }
 
 
@@ -583,15 +607,15 @@ enum EProcess : uint8_t {
 	PROCESS_LOOPBACK = 1 << 2
 };
 
-static uint8_t g_Process = PROCESS_NONE;
+static std::atomic<uint8_t> g_Process = PROCESS_NONE;
 static float* loopback_buffer = nullptr;
 static float* microphone_buffer = nullptr;
-static ma_uint32 loopback_frames;
-static ma_uint32 microphone_frames;
+static std::atomic<ma_uint32> loopback_frames;
+static std::atomic<ma_uint32> microphone_frames;
 static ma_event g_RecordThreadEvent;
-static bool thread_shutdown = false;
-static bool paused = false;
-static ma_bool8 g_NullSamplesDestroyed = MA_FALSE;
+static std::atomic<bool> thread_shutdown = false;
+static std::atomic<bool> paused = false;
+static std::atomic<ma_bool8> g_NullSamplesDestroyed = MA_FALSE;
 static ma_data_converter g_Converter;
 class MINIAUDIO_IMPLEMENTATION CAudioRecorder {
 	ma_device_config deviceConfig;
@@ -616,20 +640,20 @@ public:
 				float* pInput64 = (float*)(pInput);
 				for (ma_uint32 i = 0; i < frameCount; i++) {
 					if (pInput64[i] == 0)return;
-					else g_NullSamplesDestroyed = MA_TRUE;
+					else g_NullSamplesDestroyed.store(MA_TRUE);
 				}
 			}
 		}
 		if ((g_Process & PROCESS_LOOPBACK && make_stems) || g_CurrentOutputDevice.name == L"Not used") {
 			void* pInputOut = (void*)pInput;
 			ma_uint64 frameCountToProcess = frameCount;
-			ma_uint64 frameCountOut = frameCount * 2;
+			ma_uint64 frameCountOut = frameCount;
 			ma_data_converter_process_pcm_frames__format_only(&g_Converter, pInput, &frameCountToProcess, pInputOut, &frameCountOut);
 			ma_encoder_write_pcm_frames(encoder, pInputOut, frameCountOut, nullptr);
 		}
 		else {
 			microphone_buffer = (float*)pInput;
-			microphone_frames = frameCount;
+			microphone_frames.store(frameCount);
 		}
 		(void)pOutput;
 	}
@@ -643,20 +667,20 @@ public:
 				float* pInput64 = (float*)(pInput);
 				for (ma_uint32 i = 0; i < frameCount; i++) {
 					if (pInput64[i] == 0)return;
-					else g_NullSamplesDestroyed = MA_TRUE;
+					else g_NullSamplesDestroyed.store(MA_TRUE);
 				}
 			}
 		}
 		if ((g_Process & PROCESS_MICROPHONE && make_stems) || g_CurrentInputDevice.name == L"Not used") {
 			void* pInputOut = (void*)pInput;
 			ma_uint64 frameCountToProcess = frameCount;
-			ma_uint64 frameCountOut = frameCount * 2;
+			ma_uint64 frameCountOut = frameCount;
 			ma_data_converter_process_pcm_frames__format_only(&g_Converter, pInput, &frameCountToProcess, pInputOut, &frameCountOut);
 			ma_encoder_write_pcm_frames(encoder, pInputOut, frameCountOut, nullptr);
 		}
 		else {
 			loopback_buffer = (float*)pInput;
-			loopback_frames = frameCount;
+			loopback_frames.store(frameCount);
 			ma_event_signal(&g_RecordThreadEvent);
 		}
 		(void)pOutput;
@@ -670,8 +694,9 @@ public:
 				result = mix_f32((float*)microphone_buffer, (float*)loopback_buffer, microphone_frames, loopback_frames);
 				void* pInputOut = (void*)result;
 				ma_uint64 frameCountToProcess = microphone_frames;
-				ma_uint64 frameCountOut = microphone_frames * 2;
-				ma_data_converter_process_pcm_frames__format_only(&g_Converter, result, &frameCountToProcess, pInputOut, &frameCountOut);
+				ma_uint64 frameCountOut = microphone_frames;
+				if (buffer_format != ma_format_f32)
+					ma_data_converter_process_pcm_frames__format_only(&g_Converter, result, &frameCountToProcess, pInputOut, &frameCountOut);
 				ma_encoder_write_pcm_frames(encoder, pInputOut, frameCountOut, nullptr);
 				microphone_frames = 0;
 				loopback_frames = 0;
@@ -1157,6 +1182,16 @@ std::wstring WINAPI get_exe() {
 }
 
 int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, wchar_t* lpCmdLine, ma_int32       nShowCmd) {
+	bool toStart = false;
+	std::vector<std::string> options, values;
+	if (ParseCommandLineOptions(lpCmdLine, options, values)) {
+		for (size_t i = 0; i < options.size(); ++i) {
+			if (options[i] == "start") {
+				toStart = true;
+			}
+		}
+	}
+
 	g_Running = true;
 	SetUnhandledExceptionFilter(ExceptionHandler);
 	timeBeginPeriod(1);
@@ -1191,7 +1226,9 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, wchar_t* lpCmd
 			sound_events = std::stoi(sevents);
 			std::string mstems = conf.read("General", "make-stems");
 			make_stems = std::stoi(mstems);
-
+			if (make_stems && audio_format != "wav") {
+				throw std::exception("Can't make stems when using another format, built-in not supported by FPRecorder");
+			}
 			std::string sformat = CStringUtils::ToLowerCase(conf.read("General", "sample-format"));
 			ma_bool32 parse_result = try_parse_format(sformat.c_str(), &buffer_format);
 			if (parse_result == MA_FALSE) {
@@ -1256,7 +1293,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, wchar_t* lpCmd
 		MessageBeep(0xFFFFFFFF);
 		window = CreateDialog(NULL, MAKEINTRESOURCE(IDD_DIALOG1), NULL, DialogProc);
 		if (!IsWindow(window)) {
-			alert(L"FPWelcomeDialogInitializerError", L"File: " + get_exe() + L"\\.rsrc\\DIALOG\\" + std::to_wstring(IDD_DIALOG1) + L" not found.", MB_ICONERROR);
+			alert(L"FPWelcomeDialogInitializerError", L"File: " + get_exe() + L"\\.rsrc\\DIALOG\\" + std::to_wstring(IDD_DIALOG1) + L" not found. Try to redownload the application", MB_ICONERROR);
 			g_Retcode = -4;
 			g_Running = false;
 		}
@@ -1305,11 +1342,13 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, wchar_t* lpCmd
 		RegisterHotKey(nullptr, HOTKEY_RESTART, kmod, kcode);
 		g_CurrentPreset = g_DefaultPreset;
 	}
-	if (!g_Running)return g_Retcode;
+	if (!g_Running)return g_Retcode; // When an error was triggered
 	try {
 		window = show_window(L"FPRecorder " + version + (IsUserAnAdmin() ? L" (Administrator)" : L"")); assert(window >= 0);
 		g_MainWindow.build();
 		presets.push_back(g_DefaultPreset);
+		key_pressed(VK_SPACE) || key_pressed(VK_RETURN); // Avoid click to start recording
+
 		while (g_Running) {
 			wait(5);
 			update_window(window);
@@ -1363,7 +1402,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, wchar_t* lpCmd
 					focus(g_MainWindow.record_manager);
 					g_RecordingsManager = false;
 				}
-				if ((key_down(VK_SPACE) && get_current_focus() == g_RecordManagerWindow.items_view_list) || is_pressed(g_RecordManagerWindow.play_button)) {
+				if ((key_pressed(VK_SPACE) && get_current_focus() == g_RecordManagerWindow.items_view_list) || is_pressed(g_RecordManagerWindow.play_button)) {
 					std::wstring record_path_u;
 					CStringUtils::UnicodeConvert(record_path, record_path_u);
 					g_SoundStream.Play(record_path_u + L"/" + get_focused_list_item_name(g_RecordManagerWindow.items_view_list));
@@ -1394,7 +1433,8 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, wchar_t* lpCmd
 					}
 				}
 			}
-			if (!g_Recording && (is_pressed(g_MainWindow.record_start) || hotkey_pressed(HOTKEY_STARTSTOP))) {
+			if (!g_Recording && (is_pressed(g_MainWindow.record_start) || toStart || hotkey_pressed(HOTKEY_STARTSTOP))) {
+				toStart = false;
 				loopback_device = get_list_position(g_MainWindow.output_devices_list);
 				input_device = get_list_position(g_MainWindow.input_devices_list);
 				conf.write("General", "input-device", std::to_string(input_device));
@@ -1491,16 +1531,15 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, wchar_t* lpCmd
 		g_Running = false;
 		g_Retcode = -100;
 	}
+	g_Running = false;
 	window_reset();
 	UnregisterHotKey(nullptr, HOTKEY_STARTSTOP);
 	UnregisterHotKey(nullptr, HOTKEY_PAUSERESUME);
 	UnregisterHotKey(nullptr, HOTKEY_RESTART);
 	hide_window(window);
+	timeEndPeriod(1);
 	(void)hInstance;
 	(void)hPrevInstance;
-	(void)lpCmdLine;
-	(void)nShowCmd;
-	timeEndPeriod(1);
 	return g_Retcode; // Application exit
 }
 
