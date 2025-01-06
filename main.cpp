@@ -698,8 +698,7 @@ public:
 				if (buffer_format != ma_format_f32)
 					ma_data_converter_process_pcm_frames__format_only(&g_Converter, result, &frameCountToProcess, pInputOut, &frameCountOut);
 				ma_encoder_write_pcm_frames(encoder, pInputOut, frameCountOut, nullptr);
-				microphone_frames = 0;
-				loopback_frames = 0;
+
 			}
 		}
 	}
@@ -707,8 +706,8 @@ public:
 	void start() {
 		loopback_buffer = nullptr;
 		microphone_buffer = nullptr;
-		loopback_frames = 0;
-		microphone_frames = 0;
+		loopback_frames.store(0);
+		microphone_frames.store(0);
 		ma_data_converter_config converter_config = ma_data_converter_config_init(ma_format_f32, buffer_format, channels, channels, sample_rate, sample_rate);
 		ma_result init_result = ma_data_converter_init(&converter_config, nullptr, &g_Converter);
 		if (init_result != MA_SUCCESS) {
@@ -809,17 +808,17 @@ public:
 		ma_data_converter_uninit(&g_Converter, nullptr);
 	}
 	void pause() {
-		thread_shutdown = true;
-		paused = true;
-		g_NullSamplesDestroyed = MA_FALSE;
+		thread_shutdown.store(true);
+		paused.store(true);
+		g_NullSamplesDestroyed.store(MA_FALSE);
 	}
 	void resume() {
-		thread_shutdown = false;
+		thread_shutdown.store(false);
 		if (!make_stems && g_Process & PROCESS_MICROPHONE && g_Process & PROCESS_LOOPBACK) {
 			std::thread t(CAudioRecorder::MixingThread, &encoder[0]);
 			t.detach();
 		}
-		paused = false;
+		paused.store(false);
 	}
 };
 
