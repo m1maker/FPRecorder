@@ -43,6 +43,41 @@
 #include <vector>
 #include <dbghelp.h>
 
+#define SAFE_CALL_EX(obj, p, d) \
+do {\
+if (obj) {\
+	obj->p;\
+}\
+else {\
+d;\
+}\
+} while (0)
+
+
+
+#define SAFE_CALL(obj, p) SAFE_CALL_EX(obj, p, void)
+
+
+
+#define SAFE_CALL_VAL_EX(r, obj, p, d) \
+do {\
+	if (obj) {\
+	r = obj->p;\
+}\
+else {\
+d;\
+}\
+} while (0)
+
+
+
+#define SAFE_CALL_VAL(r, obj, p) SAFE_CALL_VAL_EX(r, obj, p,  r)
+
+
+
+
+
+
 using namespace gui;
 enum EHotKey {
 	HOTKEY_STARTSTOP = 1,
@@ -162,6 +197,7 @@ static bool ParseCommandLineOptions(const wchar_t* lpCmdLine, std::vector<std::s
 	}
 	return true;
 }
+
 
 // This class has values and flags built by command line arguments
 class COptionSet {
@@ -641,8 +677,6 @@ public:
 	std::string filename;
 	CAudioRecorder() {}
 	~CAudioRecorder() {
-		if (g_Recording)
-			this->stop();
 	}
 	static void MicrophoneCallback(ma_device* pDevice, void* pOutput, const void* pInput, ma_uint32 frameCount)
 	{
@@ -987,7 +1021,7 @@ public:
 
 static void window_reset() {
 	for (IWindow* w : g_Windows) {
-		w->reset();
+		SAFE_CALL(w, reset());
 	}
 	g_Windows.clear();
 }
@@ -1324,7 +1358,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, wchar_t* lpCmd
 		std::wstring README_u;
 		CStringUtils::UnicodeConvert(README, README_u);
 		SetDlgItemTextW(window, IDC_EDIT1, README_u.c_str());
-		while (IsWindow(window)) {
+		while (g_Running && IsWindow(window)) {
 			update_window(window);
 			gui::wait(5);
 		}
@@ -1371,7 +1405,6 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, wchar_t* lpCmd
 		g_MainWindow.build();
 		presets.push_back(g_DefaultPreset);
 		key_pressed(VK_SPACE) || key_pressed(VK_RETURN); // Avoid click to start recording
-
 		while (g_Running) {
 			wait(5);
 			update_window(window);
@@ -1505,9 +1538,11 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, wchar_t* lpCmd
 						CStringUtils::UnicodeConvert(output, output_u);
 						alert(L"FPError", L"Process exit failure!\nRetcode: " + std::to_wstring(result) + L"\nOutput: \"" + output_u + L"\".", MB_ICONERROR);
 					}
-					std::wstring recording_name_u;
-					CStringUtils::UnicodeConvert(rec.filename, recording_name_u);
-					DeleteFile(recording_name_u.c_str());
+					else {
+						std::wstring recording_name_u;
+						CStringUtils::UnicodeConvert(rec.filename, recording_name_u);
+						DeleteFile(recording_name_u.c_str());
+					}
 				}
 				g_MainWindow.build();
 
