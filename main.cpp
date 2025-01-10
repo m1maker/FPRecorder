@@ -163,6 +163,19 @@ static bool ParseCommandLineOptions(const wchar_t* lpCmdLine, std::vector<std::s
 	return true;
 }
 
+// This class has values and flags built by command line arguments
+class COptionSet {
+public:
+	bool start = false;
+	std::string filename = "";
+	bool useFilename = false;
+	bool exitAfterStop = false;
+};
+
+
+
+COptionSet g_CommandLineOptions;
+
 LONG WINAPI ExceptionHandler(EXCEPTION_POINTERS* exceptionInfo);
 
 
@@ -719,7 +732,11 @@ public:
 		std::wstring record_path_u;
 		CStringUtils::UnicodeConvert(record_path, record_path_u);
 		CreateDirectory(record_path_u.c_str(), nullptr);
-		std::string file = record_path + "/" + get_now();
+		std::string file = !g_CommandLineOptions.useFilename ? record_path + "/" + get_now() : record_path + "/" + g_CommandLineOptions.filename;
+		if (g_CommandLineOptions.useFilename) {
+			g_CommandLineOptions.useFilename = false;
+			g_CommandLineOptions.filename = "";
+		}
 		filename = file;
 
 		encoderConfig = ma_encoder_config_init(ma_encoding_format_wav, buffer_format, channels, sample_rate);
@@ -806,6 +823,7 @@ public:
 		ma_event_uninit(&g_RecordThreadEvent);
 		g_NullSamplesDestroyed = MA_FALSE;
 		ma_data_converter_uninit(&g_Converter, nullptr);
+		g_Running = !g_CommandLineOptions.exitAfterStop;
 	}
 	void pause() {
 		thread_shutdown.store(true);
@@ -1181,12 +1199,18 @@ std::wstring WINAPI get_exe() {
 }
 
 int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, wchar_t* lpCmdLine, ma_int32       nShowCmd) {
-	bool toStart = false;
 	std::vector<std::string> options, values;
 	if (ParseCommandLineOptions(lpCmdLine, options, values)) {
 		for (size_t i = 0; i < options.size(); ++i) {
-			if (options[i] == "start") {
-				toStart = true;
+			if (options[i] == "-start") {
+				g_CommandLineOptions.start = true;
+			}
+			else if (options[i] == "f") {
+				g_CommandLineOptions.filename = values[i - 1];
+				g_CommandLineOptions.useFilename = g_CommandLineOptions.start;
+			}
+			else if (options[i] == "-exit") {
+				g_CommandLineOptions.exitAfterStop = true;
 			}
 		}
 	}
@@ -1432,8 +1456,8 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, wchar_t* lpCmd
 					}
 				}
 			}
-			if (!g_Recording && (is_pressed(g_MainWindow.record_start) || toStart || hotkey_pressed(HOTKEY_STARTSTOP))) {
-				toStart = false;
+			if (!g_Recording && (is_pressed(g_MainWindow.record_start) || g_CommandLineOptions.start || hotkey_pressed(HOTKEY_STARTSTOP))) {
+				g_CommandLineOptions.start = false;
 				loopback_device = get_list_position(g_MainWindow.output_devices_list);
 				input_device = get_list_position(g_MainWindow.input_devices_list);
 				conf.write("General", "input-device", std::to_string(input_device));
