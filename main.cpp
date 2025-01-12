@@ -73,6 +73,7 @@ d;\
 
 #define SAFE_CALL_VAL(r, obj, p) SAFE_CALL_VAL_EX(r, obj, p,  r)
 
+#define confsec __declspec(allocate("CONFIG"))
 
 
 
@@ -179,8 +180,6 @@ public:
 
 
 
-
-
 static bool ParseCommandLineOptions(const wchar_t* lpCmdLine, std::vector<std::string>& options, std::vector<std::string>& values) {
 	std::string str;
 	CStringUtils::UnicodeConvert(lpCmdLine, str);
@@ -222,24 +221,24 @@ struct preset {
 static preset g_CurrentPreset;
 static std::vector<preset> presets;
 
-__declspec(allocate("CONFIG"))ma_uint32 sample_rate = 44100;
-__declspec(allocate("CONFIG"))ma_uint32 channels = 2;
-__declspec(allocate("CONFIG"))ma_uint32 buffer_size = 0;
-__declspec(allocate("CONFIG"))std::string filename_signature = "%Y %m %d %H %M %S";
-__declspec(allocate("CONFIG"))std::string record_path = "recordings";
-__declspec(allocate("CONFIG"))std::string audio_format = "wav";
-__declspec(allocate("CONFIG"))int input_device = 0;
-__declspec(allocate("CONFIG"))int loopback_device = 0;
-__declspec(allocate("CONFIG"))ma_bool32 sound_events = MA_TRUE;
-__declspec(allocate("CONFIG"))ma_bool32 make_stems = MA_FALSE;
-__declspec(allocate("CONFIG"))ma_format buffer_format = ma_format_s16;
-__declspec(allocate("CONFIG"))const ma_uint32 periods = 256;
-__declspec(allocate("CONFIG"))user_config conf("fp.ini");
-__declspec(allocate("CONFIG")) std::string hotkey_start_stop = "Windows+Shift+F1";
-__declspec(allocate("CONFIG"))std::string hotkey_pause_resume = "Windows+Shift+F2";
-__declspec(allocate("CONFIG"))std::string hotkey_restart = "Windows+Shift+F3";
-__declspec(allocate("CONFIG"))const preset g_DefaultPreset = { "Default", "ffmpeg.exe -i %I %i.%f" };
-__declspec(allocate("CONFIG"))std::string current_preset_name = "Default";
+confsec ma_uint32 sample_rate = 44100;
+confsec ma_uint32 channels = 2;
+confsec ma_uint32 buffer_size = 0;
+confsec std::string filename_signature = "%Y %m %d %H %M %S";
+confsec std::string record_path = "recordings";
+confsec std::string audio_format = "wav";
+confsec int input_device = 0;
+confsec int loopback_device = 0;
+confsec ma_bool32 sound_events = MA_TRUE;
+confsec ma_bool32 make_stems = MA_FALSE;
+confsec ma_format buffer_format = ma_format_s16;
+confsec const ma_uint32 periods = 256;
+confsec std::string hotkey_start_stop = "Windows+Shift+F1";
+confsec std::string hotkey_pause_resume = "Windows+Shift+F2";
+confsec std::string hotkey_restart = "Windows+Shift+F3";
+confsec const preset g_DefaultPreset = { "Default", "ffmpeg.exe -i %I %i.%f" };
+confsec std::string current_preset_name = "Default";
+confsec static user_config conf("fp.ini");
 
 class CUIAutomationSpeech {
 	IUIAutomation* pAutomation = nullptr;
@@ -263,12 +262,9 @@ public:
 		}
 	}
 	~CUIAutomationSpeech() {
-		if (pProvider)pProvider->Release();
-
-		if (pCondition)pCondition->Release();
-
-		if (pAutomation)pAutomation->Release();
-
+		SAFE_CALL(pProvider, Release());
+		SAFE_CALL(pCondition, Release());
+		SAFE_CALL(pAutomation, Release());
 	}
 
 	bool Speak(const wchar_t* text, bool interrupt = true) {
@@ -277,8 +273,8 @@ public:
 			flags = NotificationProcessing_ImportantMostRecent;
 		pProvider = new Provider(GetForegroundWindow());
 
-		HRESULT hr = pAutomation->ElementFromHandle(GetForegroundWindow(), &pElement);
-
+		HRESULT hr = 0;
+		SAFE_CALL_VAL_EX(hr, pAutomation, ElementFromHandle(GetForegroundWindow(), &pElement), return false);
 		if (FAILED(hr)) {
 			return false;
 		}
@@ -481,7 +477,7 @@ public:
 		return Play(filename_u);
 	}
 
-	bool PlayFromMemory(const std::vector<unsigned char>& data, bool wait = true) {
+	bool PlayFromMemory(const unsigned char* data, bool wait = true) {
 		if (m_Decoder != nullptr) {
 			ma_decoder_uninit(m_Decoder);
 			delete m_Decoder;
@@ -496,7 +492,7 @@ public:
 		}
 		if (!m_SoundActive) {
 			if (m_Decoder == nullptr)m_Decoder = new ma_decoder;
-			ma_decoder_init_memory(data.data(), data.size(), nullptr, m_Decoder);
+			ma_decoder_init_memory((void*)data, 13000, nullptr, m_Decoder); // For these are FPRecorder short sounds. It is normal allocation size for
 			ma_result result = ma_sound_init_from_data_source(&mixer, m_Decoder, MA_SOUND_FLAG_NO_SPATIALIZATION, nullptr, &player);
 			if (result == MA_SUCCESS)m_SoundActive = true;
 			if (result == MA_SUCCESS)ma_sound_start(&player);
@@ -539,7 +535,7 @@ public:
 
 static CSoundStream g_SoundStream;
 
-MA_API ma_bool32 try_parse_format(const char* str, ma_format* pValue)
+static inline ma_bool32 try_parse_format(const char* str, ma_format* pValue)
 {
 	ma_format format;
 
@@ -569,7 +565,7 @@ MA_API ma_bool32 try_parse_format(const char* str, ma_format* pValue)
 	return MA_TRUE;
 }
 
-MA_API const char* ma_format_to_string(ma_format format) {
+static inline const char* ma_format_to_string(ma_format format) {
 	switch (format) {
 	case ma_format_u8:
 		return "u8";
@@ -588,7 +584,7 @@ MA_API const char* ma_format_to_string(ma_format format) {
 }
 
 
-std::string _cdecl get_now() {
+static inline std::string _cdecl get_now() {
 	auto now = std::chrono::system_clock::now();
 	std::time_t now_c = std::chrono::system_clock::to_time_t(now);
 
@@ -642,7 +638,7 @@ struct audio_device {
 static audio_device g_CurrentInputDevice;
 static audio_device g_CurrentOutputDevice;
 
-MA_API float* mix_f32(float* input1, float* input2, ma_uint32 frameCountFirst, ma_uint32 frameCountLast) {
+static inline float* mix_f32(float* input1, float* input2, ma_uint32 frameCountFirst, ma_uint32 frameCountLast) {
 	float* result = new float[frameCountFirst + frameCountLast];
 	for (ma_uint32 i = 0; i < frameCountFirst + frameCountLast; i++) {
 		result[i] = (input1[i] + input2[i]);
@@ -1026,7 +1022,7 @@ static void window_reset() {
 	g_Windows.clear();
 }
 
-const std::wstring version = L"0.0.1 Alpha";
+static const std::wstring version = L"0.0.1 Alpha";
 static CAudioRecorder rec;
 
 
@@ -1249,7 +1245,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, wchar_t* lpCmd
 		}
 	}
 
-	g_Running = true;
+	g_Running = true; // Starting application
 	SetUnhandledExceptionFilter(ExceptionHandler);
 	timeBeginPeriod(1);
 	DWORD kmod = -1;
@@ -1633,9 +1629,8 @@ LONG WINAPI ExceptionHandler(EXCEPTION_POINTERS* exceptionInfo) {
 	if (sound_events)g_SoundStream.PlayFromMemory(Error_wav, false);
 	alert(L"FPRuntimeError", str_u, MB_ICONERROR);
 	g_Retcode = -100;
-	g_Running = false;
+	g_Running = false; // In any situation, user should nott lost the record. Give application call audio recorder destructor to try uninitialize the encoder
 	timeEndPeriod(1);
-	exit(g_Retcode);// Force exit when the exception is thrown
 	return 0;
 }
 
