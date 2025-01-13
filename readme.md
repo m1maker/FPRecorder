@@ -1,6 +1,6 @@
 # FPRecorder (Fast Portable Recorder)
 
-**Copyright © 2024 M_maker**
+  **Copyright ©     2025 M_maker**
 
 FPRecorder is a portable recording tool for Windows that allows you to record sound from a microphone and from speakers or headphones. It's called Loopback.
 
