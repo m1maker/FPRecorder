@@ -680,14 +680,21 @@ enum EProcess : uint8_t {
 };
 
 static std::atomic<uint8_t> g_Process = PROCESS_NONE;
-static float* loopback_buffer = nullptr;
-static float* microphone_buffer = nullptr;
-static std::atomic<ma_uint32> loopback_frames;
-static std::atomic<ma_uint32> microphone_frames;
-static ma_event g_RecordThreadEvent;
+
+struct AudioData {
+	float* buffer;
+	ma_uint32 frameCount;
+};
+
+std::deque<AudioData> microphoneQueue;
+std::deque<AudioData> loopbackQueue;
+std::mutex microphoneMutex;
+std::mutex loopbackMutex;
+std::condition_variable microphoneCondition;
+std::condition_variable loopbackCondition;
+
 static std::atomic<bool> thread_shutdown = false;
 static std::atomic<bool> paused = false;
-static std::atomic<ma_bool8> g_NullSamplesDestroyed = MA_FALSE;
 static ma_data_converter g_Converter;
 class MINIAUDIO_IMPLEMENTATION CAudioRecorder {
 	ma_device_config deviceConfig;
@@ -703,89 +710,152 @@ public:
 		if (g_Recording)
 			this->stop();
 	}
+
 	static void MicrophoneCallback(ma_device* pDevice, void* pOutput, const void* pInput, ma_uint32 frameCount) {
 		if (paused || !(g_Process & PROCESS_MICROPHONE)) return;
 
-		ma_encoder* encoder = reinterpret_cast<ma_encoder*>(pDevice->pUserData);
+		float* buffer = new float[frameCount * channels];
+		memcpy(buffer, pInput, frameCount * channels * sizeof(float));
 
-		if (g_NullSamplesDestroyed == MA_FALSE && buffer_format != ma_format_f32) {
-			const float* pInput64 = static_cast<const float*>(pInput);
-			for (ma_uint32 i = 0; i < frameCount; i++) {
-				if (pInput64[i] != 0) {
-					g_NullSamplesDestroyed.store(MA_TRUE);
-					break; // Exit early on first non-zero sample
-				}
-			}
+		AudioData data;
+		data.buffer = buffer;
+		data.frameCount = frameCount;
+
+
+		{
+			std::lock_guard<std::mutex> lock(microphoneMutex);
+			microphoneQueue.push_back(data);
 		}
 
-		if ((g_Process & PROCESS_LOOPBACK && make_stems) || g_CurrentOutputDevice.name == L"Not used") {
-			void* pInputOut = (void*)pInput;
-			ma_uint64 frameCountToProcess = frameCount;
-			ma_uint64 frameCountOut = frameCount;
-			ma_data_converter_process_pcm_frames__format_only(&g_Converter, pInput, &frameCountToProcess, pInputOut, &frameCountOut);
-			ma_encoder_write_pcm_frames(encoder, pInputOut, frameCountOut, nullptr);
-		}
-		else {
-			microphone_buffer = (float*)pInput;
-			microphone_frames.store(frameCount);
-		}
-		(void)pOutput; // Avoid unused parameter warning
+		microphoneCondition.notify_one();
+
+		(void)pOutput;
 	}
 
 	static void LoopbackCallback(ma_device* pDevice, void* pOutput, const void* pInput, ma_uint32 frameCount) {
 		if (paused || !(g_Process & PROCESS_LOOPBACK)) return;
 
-		ma_encoder* encoder = reinterpret_cast<ma_encoder*>(pDevice->pUserData);
+		float* buffer = new float[frameCount * channels];
+		memcpy(buffer, pInput, frameCount * channels * sizeof(float));
 
-		if (g_NullSamplesDestroyed == MA_FALSE && buffer_format != ma_format_f32) {
-			const float* pInput64 = static_cast<const float*>(pInput);
-			for (ma_uint32 i = 0; i < frameCount; i++) {
-				if (pInput64[i] != 0) {
-					g_NullSamplesDestroyed.store(MA_TRUE);
-					break; // Exit early on first non-zero sample
-				}
-			}
+		AudioData data;
+		data.buffer = buffer;
+		data.frameCount = frameCount;
+
+		{
+			std::lock_guard<std::mutex> lock(loopbackMutex);
+			loopbackQueue.push_back(data);
 		}
 
-		if ((g_Process & PROCESS_MICROPHONE && make_stems) || g_CurrentInputDevice.name == L"Not used") {
-			void* pInputOut = (void*)pInput;
-			ma_uint64 frameCountToProcess = frameCount;
-			ma_uint64 frameCountOut = frameCount;
-			ma_data_converter_process_pcm_frames__format_only(&g_Converter, pInput, &frameCountToProcess, pInputOut, &frameCountOut);
-			ma_encoder_write_pcm_frames(encoder, pInputOut, frameCountOut, nullptr);
-		}
-		else {
-			loopback_buffer = (float*)pInput;
-			loopback_frames.store(frameCount);
-			ma_event_signal(&g_RecordThreadEvent);
-		}
-		(void)pOutput; // Avoid unused parameter warning
+		loopbackCondition.notify_one();
+
+		(void)pOutput;
 	}
 
-	static void MixingThread(ma_encoder* encoder) {
+	static void MixingThread(ma_encoder* encoder, ma_encoder* encoderSecond) {
 		while (!thread_shutdown && g_Running) {
-			ma_event_wait(&g_RecordThreadEvent);
-
-			if (microphone_buffer != nullptr && loopback_buffer != nullptr) {
-				void* result = mix_f32(microphone_buffer, loopback_buffer, microphone_frames.load(), loopback_frames.load());
-				void* pInputOut = result;
-
-				ma_uint64 frameCountToProcess = microphone_frames.load();
-				ma_uint64 frameCountOut = microphone_frames.load();
-
-				if (buffer_format != ma_format_f32) {
-					ma_data_converter_process_pcm_frames__format_only(&g_Converter, result, &frameCountToProcess, pInputOut, &frameCountOut);
+			AudioData microphoneData;
+			AudioData loopbackData;
+			bool microphoneDataAvailable = false;
+			bool loopbackDataAvailable = false;
+			if (g_Process & PROCESS_MICROPHONE) {
+				{
+					std::unique_lock<std::mutex> lock(microphoneMutex);
+					microphoneCondition.wait(lock, [&] { return !microphoneQueue.empty() || thread_shutdown; });
+					if (thread_shutdown) break;
+					microphoneData = microphoneQueue.front();
+					microphoneQueue.pop_front();
+					microphoneDataAvailable = true;
 				}
+			}
+			if (g_Process & PROCESS_LOOPBACK) {
+				{
+					std::unique_lock<std::mutex> lock(loopbackMutex);
+					loopbackCondition.wait(lock, [&] { return !loopbackQueue.empty() || thread_shutdown; });
+					if (thread_shutdown) {
+						if (microphoneDataAvailable) {
+							delete[] microphoneData.buffer;
+						}
+						break;
+					}
+					loopbackData = loopbackQueue.front();
+					loopbackQueue.pop_front();
+					loopbackDataAvailable = true;
+				}
+			}
+
+			if (microphoneDataAvailable && loopbackDataAvailable) {
+				if (!make_stems) {
+					float* mixedBuffer = mix_f32(microphoneData.buffer, loopbackData.buffer, microphoneData.frameCount, loopbackData.frameCount);
+
+					void* pInputOut = mixedBuffer;
+					ma_uint64 frameCountToProcess = microphoneData.frameCount;
+					ma_uint64 frameCountOut = microphoneData.frameCount;
+					if (buffer_format != ma_format_f32) {
+						ma_data_converter_process_pcm_frames__format_only(&g_Converter, mixedBuffer, &frameCountToProcess, pInputOut, &frameCountOut);
+					}
+
+					ma_encoder_write_pcm_frames(encoder, pInputOut, frameCountOut, nullptr);
+
+					delete[] microphoneData.buffer;
+					delete[] loopbackData.buffer;
+					delete[] mixedBuffer;
+				}
+				else {
+					void* pInputOut = microphoneData.buffer;
+					ma_uint64 frameCountToProcess = microphoneData.frameCount;
+					ma_uint64 frameCountOut = microphoneData.frameCount;
+					if (buffer_format != ma_format_f32) {
+						ma_data_converter_process_pcm_frames__format_only(&g_Converter, microphoneData.buffer, &frameCountToProcess, pInputOut, &frameCountOut);
+					}
+
+					ma_encoder_write_pcm_frames(encoder, pInputOut, frameCountOut, nullptr);
+
+					delete[] microphoneData.buffer;
+					pInputOut = loopbackData.buffer;
+					frameCountToProcess = loopbackData.frameCount;
+					frameCountOut = loopbackData.frameCount;
+					if (buffer_format != ma_format_f32) {
+						ma_data_converter_process_pcm_frames__format_only(&g_Converter, loopbackData.buffer, &frameCountToProcess, pInputOut, &frameCountOut);
+					}
+
+					ma_encoder_write_pcm_frames(encoderSecond, pInputOut, frameCountOut, nullptr);
+
+					delete[] loopbackData.buffer;
+				}
+			}
+
+
+			else if (microphoneDataAvailable) {
+				void* pInputOut = microphoneData.buffer;
+				ma_uint64 frameCountToProcess = microphoneData.frameCount;
+				ma_uint64 frameCountOut = microphoneData.frameCount;
+				if (buffer_format != ma_format_f32) {
+					ma_data_converter_process_pcm_frames__format_only(&g_Converter, microphoneData.buffer, &frameCountToProcess, pInputOut, &frameCountOut);
+				}
+
 				ma_encoder_write_pcm_frames(encoder, pInputOut, frameCountOut, nullptr);
+
+				delete[] microphoneData.buffer;
+			}
+			else if (loopbackDataAvailable) {
+				void* pInputOut = loopbackData.buffer;
+				ma_uint64 frameCountToProcess = loopbackData.frameCount;
+				ma_uint64 frameCountOut = loopbackData.frameCount;
+				if (buffer_format != ma_format_f32) {
+					ma_data_converter_process_pcm_frames__format_only(&g_Converter, loopbackData.buffer, &frameCountToProcess, pInputOut, &frameCountOut);
+				}
+
+				ma_encoder_write_pcm_frames(encoder, pInputOut, frameCountOut, nullptr);
+
+				delete[] loopbackData.buffer;
 			}
 		}
 	}
 
 	void start() {
-		loopback_buffer = nullptr;
-		microphone_buffer = nullptr;
-		loopback_frames.store(0);
-		microphone_frames.store(0);
+		microphoneQueue.clear();
+		loopbackQueue.clear();
 		ma_data_converter_config converter_config = ma_data_converter_config_init(ma_format_f32, buffer_format, channels, channels, sample_rate, sample_rate);
 		ma_result init_result = ma_data_converter_init(&converter_config, nullptr, &g_Converter);
 		if (init_result != MA_SUCCESS) {
@@ -793,7 +863,6 @@ public:
 			g_Retcode = -3;
 			g_Running = false;
 		}
-		ma_event_init(&g_RecordThreadEvent);
 		std::wstring record_path_u;
 		CStringUtils::UnicodeConvert(record_path, record_path_u);
 		CreateDirectory(record_path_u.c_str(), nullptr);
@@ -866,38 +935,66 @@ public:
 			ma_device_start(&loopback_device);
 			g_Process |= PROCESS_LOOPBACK;
 		}
-		this->resume();
+		thread_shutdown.store(false);
+		if (make_stems) {
+			std::thread t(CAudioRecorder::MixingThread, &encoder[0], &encoder[1]);
+			t.detach();
+		}
+		else {
+			std::thread t(CAudioRecorder::MixingThread, &encoder[0], &encoder[0]);
+			t.detach();
+		}
 	}
+
 	void stop() {
 		if (g_Process & PROCESS_MICROPHONE) {
-			ma_event_signal(&g_RecordThreadEvent);
 			ma_device_uninit(&recording_device);
 			g_Process &= ~PROCESS_MICROPHONE;
 		}
 		if (g_Process & PROCESS_LOOPBACK) {
-			thread_shutdown = true;
 			g_Process &= ~PROCESS_LOOPBACK;
 			ma_device_uninit(&loopback_device);
 		}
 		if (make_stems)
 			ma_encoder_uninit(&encoder[1]);
 		ma_encoder_uninit(&encoder[0]);
-		ma_event_uninit(&g_RecordThreadEvent);
-		g_NullSamplesDestroyed = MA_FALSE;
 		ma_data_converter_uninit(&g_Converter, nullptr);
+		thread_shutdown.store(true);
+		{
+			std::lock_guard<std::mutex> lock(microphoneMutex);
+			while (!microphoneQueue.empty()) {
+				delete[] microphoneQueue.front().buffer;
+				microphoneQueue.pop_front();
+			}
+		}
+		{
+			std::lock_guard<std::mutex> lock(loopbackMutex);
+			while (!loopbackQueue.empty()) {
+				delete[] loopbackQueue.front().buffer;
+				loopbackQueue.pop_front();
+			}
+		}
 		g_Running = !g_CommandLineOptions.exitAfterStop;
 	}
 	void pause() {
-		thread_shutdown.store(true);
 		paused.store(true);
-		g_NullSamplesDestroyed.store(MA_FALSE);
-	}
-	void resume() {
-		thread_shutdown.store(false);
-		if (!make_stems && g_Process & PROCESS_MICROPHONE && g_Process & PROCESS_LOOPBACK) {
-			std::thread t(CAudioRecorder::MixingThread, &encoder[0]);
-			t.detach();
+		{
+			std::lock_guard<std::mutex> lock(microphoneMutex);
+			while (!microphoneQueue.empty()) {
+				delete[] microphoneQueue.front().buffer;
+				microphoneQueue.pop_front();
+			}
 		}
+		{
+			std::lock_guard<std::mutex> lock(loopbackMutex);
+			while (!loopbackQueue.empty()) {
+				delete[] loopbackQueue.front().buffer;
+				loopbackQueue.pop_front();
+			}
+		}
+	}
+
+	void resume() {
 		paused.store(false);
 	}
 };
