@@ -209,7 +209,7 @@ public:
 
 
 
-COptionSet g_CommandLineOptions;
+static COptionSet g_CommandLineOptions;
 
 LONG WINAPI ExceptionHandler(EXCEPTION_POINTERS* exceptionInfo);
 
@@ -425,6 +425,33 @@ static std::vector<std::wstring> WINAPI get_files(std::wstring path) {
 
 
 
+
+
+class CAudioContext {
+	ma_context context;
+public:
+	CAudioContext() {
+		ma_result result;
+		if (ma_context_init(NULL, 0, NULL, &context) != MA_SUCCESS) {
+			alert(L"FPError", L"Failed to initialize context.");
+		}
+	}
+
+	~CAudioContext() {
+		ma_context_uninit(&context);
+	}
+	operator ma_context* () {
+		return &context;
+	}
+};
+
+
+static CAudioContext g_AudioContext;
+
+
+
+
+
 class CSoundStream {
 	ma_engine mixer;
 	ma_sound player;
@@ -613,7 +640,7 @@ struct application {
 
 static const application g_LoopbackApplication{ L"", 0 };
 
-std::vector<application> WINAPI get_tasklist() {
+static std::vector<application> WINAPI get_tasklist() {
 	std::vector<application> tasklist;
 	HANDLE hSnapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
 	if (hSnapshot != INVALID_HANDLE_VALUE) {
@@ -673,20 +700,24 @@ public:
 	std::string filename;
 	CAudioRecorder() {}
 	~CAudioRecorder() {
+		if (g_Recording)
+			this->stop();
 	}
-	static void MicrophoneCallback(ma_device* pDevice, void* pOutput, const void* pInput, ma_uint32 frameCount)
-	{
-		if (paused || !g_Process & PROCESS_MICROPHONE)return;
+	static void MicrophoneCallback(ma_device* pDevice, void* pOutput, const void* pInput, ma_uint32 frameCount) {
+		if (paused || !(g_Process & PROCESS_MICROPHONE)) return;
+
 		ma_encoder* encoder = reinterpret_cast<ma_encoder*>(pDevice->pUserData);
-		if (g_NullSamplesDestroyed == MA_FALSE) {
-			if (buffer_format != ma_format_f32) {
-				float* pInput64 = (float*)(pInput);
-				for (ma_uint32 i = 0; i < frameCount; i++) {
-					if (pInput64[i] == 0)return;
-					else g_NullSamplesDestroyed.store(MA_TRUE);
+
+		if (g_NullSamplesDestroyed == MA_FALSE && buffer_format != ma_format_f32) {
+			const float* pInput64 = static_cast<const float*>(pInput);
+			for (ma_uint32 i = 0; i < frameCount; i++) {
+				if (pInput64[i] != 0) {
+					g_NullSamplesDestroyed.store(MA_TRUE);
+					break; // Exit early on first non-zero sample
 				}
 			}
 		}
+
 		if ((g_Process & PROCESS_LOOPBACK && make_stems) || g_CurrentOutputDevice.name == L"Not used") {
 			void* pInputOut = (void*)pInput;
 			ma_uint64 frameCountToProcess = frameCount;
@@ -698,22 +729,24 @@ public:
 			microphone_buffer = (float*)pInput;
 			microphone_frames.store(frameCount);
 		}
-		(void)pOutput;
+		(void)pOutput; // Avoid unused parameter warning
 	}
+
 	static void LoopbackCallback(ma_device* pDevice, void* pOutput, const void* pInput, ma_uint32 frameCount) {
-		if (paused)return;
-		if ((g_Process & PROCESS_LOOPBACK) != PROCESS_LOOPBACK)return;
+		if (paused || !(g_Process & PROCESS_LOOPBACK)) return;
+
 		ma_encoder* encoder = reinterpret_cast<ma_encoder*>(pDevice->pUserData);
 
-		if (g_NullSamplesDestroyed == MA_FALSE) {
-			if (buffer_format != ma_format_f32) {
-				float* pInput64 = (float*)(pInput);
-				for (ma_uint32 i = 0; i < frameCount; i++) {
-					if (pInput64[i] == 0)return;
-					else g_NullSamplesDestroyed.store(MA_TRUE);
+		if (g_NullSamplesDestroyed == MA_FALSE && buffer_format != ma_format_f32) {
+			const float* pInput64 = static_cast<const float*>(pInput);
+			for (ma_uint32 i = 0; i < frameCount; i++) {
+				if (pInput64[i] != 0) {
+					g_NullSamplesDestroyed.store(MA_TRUE);
+					break; // Exit early on first non-zero sample
 				}
 			}
 		}
+
 		if ((g_Process & PROCESS_MICROPHONE && make_stems) || g_CurrentInputDevice.name == L"Not used") {
 			void* pInputOut = (void*)pInput;
 			ma_uint64 frameCountToProcess = frameCount;
@@ -726,22 +759,24 @@ public:
 			loopback_frames.store(frameCount);
 			ma_event_signal(&g_RecordThreadEvent);
 		}
-		(void)pOutput;
+		(void)pOutput; // Avoid unused parameter warning
 	}
 
 	static void MixingThread(ma_encoder* encoder) {
 		while (!thread_shutdown && g_Running) {
 			ma_event_wait(&g_RecordThreadEvent);
-			if (microphone_buffer != nullptr and loopback_buffer != nullptr) {
-				void* result = nullptr;
-				result = mix_f32((float*)microphone_buffer, (float*)loopback_buffer, microphone_frames, loopback_frames);
-				void* pInputOut = (void*)result;
-				ma_uint64 frameCountToProcess = microphone_frames;
-				ma_uint64 frameCountOut = microphone_frames;
-				if (buffer_format != ma_format_f32)
-					ma_data_converter_process_pcm_frames__format_only(&g_Converter, result, &frameCountToProcess, pInputOut, &frameCountOut);
-				ma_encoder_write_pcm_frames(encoder, pInputOut, frameCountOut, nullptr);
 
+			if (microphone_buffer != nullptr && loopback_buffer != nullptr) {
+				void* result = mix_f32(microphone_buffer, loopback_buffer, microphone_frames.load(), loopback_frames.load());
+				void* pInputOut = result;
+
+				ma_uint64 frameCountToProcess = microphone_frames.load();
+				ma_uint64 frameCountOut = microphone_frames.load();
+
+				if (buffer_format != ma_format_f32) {
+					ma_data_converter_process_pcm_frames__format_only(&g_Converter, result, &frameCountToProcess, pInputOut, &frameCountOut);
+				}
+				ma_encoder_write_pcm_frames(encoder, pInputOut, frameCountOut, nullptr);
 			}
 		}
 	}
@@ -801,7 +836,7 @@ public:
 			deviceConfig.periods = periods;
 			deviceConfig.dataCallback = CAudioRecorder::MicrophoneCallback;
 			deviceConfig.pUserData = &encoder[0];
-			result = ma_device_init(NULL, &deviceConfig, &recording_device);
+			result = ma_device_init(g_AudioContext, &deviceConfig, &recording_device);
 			if (result != MA_SUCCESS) {
 				if (sound_events)		g_SoundStream.PlayFromMemory(Error_wav, false);
 				alert(L"FPAudioDeviceInitializerError", L"Error initializing audio device for \"" + g_CurrentInputDevice.name + L"\" with retcode " + std::to_wstring(result) + L".", MB_ICONERROR);
@@ -820,12 +855,9 @@ public:
 			loopbackDeviceConfig.periodSizeInMilliseconds = buffer_size;
 			loopbackDeviceConfig.dataCallback = CAudioRecorder::LoopbackCallback;
 			loopbackDeviceConfig.pUserData = make_stems ? &encoder[1] : &encoder[0];
-			ma_backend backends[] = {
-				ma_backend_wasapi
-			};
 
-
-			result = ma_device_init_ex(backends, sizeof(backends) / sizeof(backends[0]), NULL, &loopbackDeviceConfig, &loopback_device);			if (result != MA_SUCCESS) {
+			result = ma_device_init(g_AudioContext, &loopbackDeviceConfig, &loopback_device);
+			if (result != MA_SUCCESS) {
 				if (sound_events)		g_SoundStream.PlayFromMemory(Error_wav, false);
 				alert(L"FPAudioDeviceInitializerError", L"Error initializing audio device for \"" + g_CurrentOutputDevice.name + L"\" with retcode " + std::to_wstring(result) + L".", MB_ICONERROR);
 				g_Retcode = result;
@@ -874,18 +906,13 @@ public:
 
 std::vector<audio_device> MA_API get_input_audio_devices()
 {
-	std::vector<audio_device> audioDevices;
 	ma_result result;
-	ma_context context;
+	std::vector<audio_device> audioDevices;
 	ma_device_info* pCaptureDeviceInfos;
 	ma_uint32 captureDeviceCount;
 	ma_uint32 iCaptureDevice;
-	if (ma_context_init(NULL, 0, NULL, &context) != MA_SUCCESS) {
-		alert(L"FPError", L"Failed to initialize context.");
-		return audioDevices;;
-	}
 
-	result = ma_context_get_devices(&context, nullptr, nullptr, &pCaptureDeviceInfos, &captureDeviceCount);
+	result = ma_context_get_devices(g_AudioContext, nullptr, nullptr, &pCaptureDeviceInfos, &captureDeviceCount);
 	if (result != MA_SUCCESS) {
 		return audioDevices;
 	}
@@ -899,24 +926,18 @@ std::vector<audio_device> MA_API get_input_audio_devices()
 		ad.name = name_str_u;
 		audioDevices.push_back(ad);
 	}
-	ma_context_uninit(&context);
 	return audioDevices;
 }
+
 std::vector<audio_device> MA_API get_output_audio_devices()
 {
-	std::vector<audio_device> audioDevices;
 	ma_result result;
-	ma_context context;
+	std::vector<audio_device> audioDevices;
 	ma_device_info* pPlaybackDeviceInfos;
 	ma_uint32 playbackDeviceCount;
 	ma_uint32 iPlaybackDevice;
 
-	if (ma_context_init(NULL, 0, NULL, &context) != MA_SUCCESS) {
-		alert(L"FPError", L"Failed to initialize context.");
-		return audioDevices;;
-	}
-
-	result = ma_context_get_devices(&context, &pPlaybackDeviceInfos, &playbackDeviceCount, nullptr, nullptr);
+	result = ma_context_get_devices(g_AudioContext, &pPlaybackDeviceInfos, &playbackDeviceCount, nullptr, nullptr);
 	if (result != MA_SUCCESS) {
 		return audioDevices;
 	}
@@ -931,7 +952,6 @@ std::vector<audio_device> MA_API get_output_audio_devices()
 		audioDevices.push_back(ad);
 	}
 
-	ma_context_uninit(&context);
 	return audioDevices;
 }
 
@@ -1630,7 +1650,6 @@ LONG WINAPI ExceptionHandler(EXCEPTION_POINTERS* exceptionInfo) {
 	alert(L"FPRuntimeError", str_u, MB_ICONERROR);
 	g_Retcode = -100;
 	g_Running = false; // In any situation, user should nott lost the record. Give application call audio recorder destructor to try uninitialize the encoder
-	timeEndPeriod(1);
 	return 0;
 }
 
