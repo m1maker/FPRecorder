@@ -1417,7 +1417,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, wchar_t* lpCmd
 	}
 	if (!g_Running)return g_Retcode; // When an error was triggered
 	try {
-		window = show_window(L"FPRecorder " + version + (IsUserAnAdmin() ? L" (Administrator)" : L"")); assert(window >= 0);
+		window = show_window(L"FPRecorder " + version + (IsUserAnAdmin() ? L" (Administrator)" : L"")); assert(window > 0);
 		g_MainWindow.build();
 		presets.push_back(g_DefaultPreset);
 		key_pressed(VK_SPACE) || key_pressed(VK_RETURN); // Avoid click to start recording
@@ -1576,7 +1576,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, wchar_t* lpCmd
 					g_RecordingPaused = false;
 					set_text(g_RecordingWindow.record_pause, L"&Pause recording");
 				}
-				ma_sleep(100);
+				wait(20);
 			}
 			if (g_Recording && (is_pressed(g_RecordingWindow.record_restart) || hotkey_pressed(HOTKEY_RESTART))) {
 				wait(10);
