@@ -1641,7 +1641,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, wchar_t* lpCmd
 					std::vector<std::string> split = CStringUtils::Split(".wav", rec.filename);
 					g_SpeechProvider.Speak("Converting...");
 					std::string cmd = g_CurrentPreset.command;
-					CStringUtils::Replace(cmd, "%I", "\"" + rec.filename + "\"", true);
+					CStringUtils::Replace(cmd, "%I", "\"" + rec.filename + ".wav\"", true);
 					CStringUtils::Replace(cmd, "%i", "\"" + split[0] + "\"", true);
 					CStringUtils::Replace(cmd, "%f", audio_format, true);
 					int result = ExecSystemCmd(cmd, output);
@@ -1653,7 +1653,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, wchar_t* lpCmd
 					}
 					else {
 						std::wstring recording_name_u;
-						CStringUtils::UnicodeConvert(rec.filename, recording_name_u);
+						CStringUtils::UnicodeConvert(rec.filename + ".wav", recording_name_u);
 						DeleteFile(recording_name_u.c_str());
 					}
 				}
