@@ -213,7 +213,6 @@ static COptionSet g_CommandLineOptions;
 
 LONG WINAPI ExceptionHandler(EXCEPTION_POINTERS* exceptionInfo);
 
-
 struct preset {
 	std::string name;
 	std::string command;
@@ -611,15 +610,57 @@ static inline const char* ma_format_to_string(ma_format format) {
 }
 
 
-static inline std::string _cdecl get_now() {
+static inline std::string _cdecl get_now(bool filename = true) {
 	auto now = std::chrono::system_clock::now();
 	std::time_t now_c = std::chrono::system_clock::to_time_t(now);
 
 	std::tm tm = *std::localtime(&now_c);
 	std::stringstream oss;
-	oss << std::put_time(&tm, filename_signature.c_str());
+	oss << std::put_time(&tm, filename ? filename_signature.c_str() : "%Y-%m-%d %H:%M:%S");
 	return oss.str();
 }
+
+bool g_EnableLog = false;
+
+class CLogger {
+	std::ofstream ofs;
+public:
+	CLogger(const std::string& filename) {
+		if (g_EnableLog)
+			ofs.open(filename, std::ios::out | std::ios::app);
+	}
+
+	template <typename T>
+	CLogger& operator<<(const T& info) {
+		if (ofs.is_open()) {
+			ofs << get_now() << " - " << info;
+		}
+		return *this;
+	}
+
+	template <typename T>
+	CLogger& operator<<(T& info) {
+		if (ofs.is_open()) {
+			ofs << get_now() << " - " << info;
+		}
+		return *this;
+	}
+
+	~CLogger() {
+		if (ofs.is_open()) {
+			ofs.close();
+		}
+	}
+};
+
+bool str_to_bool(const std::string& val) {
+	std::string str = CStringUtils::ToLowerCase(val);
+	if (str == "0" || str == "false") {
+		return false;
+	}
+	return str == "1" || str == "true" ? true : false;
+}
+
 
 using namespace std;
 
@@ -1387,9 +1428,9 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, wchar_t* lpCmd
 			std::string oud = conf.read("General", "loopback-device");
 			loopback_device = std::stoi(oud);
 			std::string sevents = conf.read("General", "sound-events");
-			sound_events = std::stoi(sevents);
+			sound_events = str_to_bool(sevents);
 			std::string mstems = conf.read("General", "make-stems");
-			make_stems = std::stoi(mstems);
+			make_stems = str_to_bool(mstems);
 			if (make_stems && audio_format != "wav") {
 				throw std::exception("Can't make stems when using another format, built-in not supported by FPRecorder");
 			}
