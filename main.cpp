@@ -752,8 +752,8 @@ public:
 		(void)pOutput;
 	}
 
-	static void MixingThread(ma_encoder* encoder, ma_encoder* encoderSecond) {
-		while (!thread_shutdown && g_Running) {
+	static void MixingThread(CAudioRecorder* recorder) {
+		while (!thread_shutdown && g_Running && recorder) {
 			AudioData microphoneData;
 			AudioData loopbackData;
 			bool microphoneDataAvailable = false;
@@ -795,7 +795,7 @@ public:
 						ma_data_converter_process_pcm_frames__format_only(&g_Converter, mixedBuffer, &frameCountToProcess, pInputOut, &frameCountOut);
 					}
 
-					ma_encoder_write_pcm_frames(encoder, pInputOut, frameCountOut, nullptr);
+					ma_encoder_write_pcm_frames(&recorder->encoder[0], pInputOut, frameCountOut, nullptr);
 
 					delete[] microphoneData.buffer;
 					delete[] loopbackData.buffer;
@@ -809,7 +809,7 @@ public:
 						ma_data_converter_process_pcm_frames__format_only(&g_Converter, microphoneData.buffer, &frameCountToProcess, pInputOut, &frameCountOut);
 					}
 
-					ma_encoder_write_pcm_frames(encoder, pInputOut, frameCountOut, nullptr);
+					ma_encoder_write_pcm_frames(&recorder->encoder[0], pInputOut, frameCountOut, nullptr);
 
 					delete[] microphoneData.buffer;
 					pInputOut = loopbackData.buffer;
@@ -819,7 +819,7 @@ public:
 						ma_data_converter_process_pcm_frames__format_only(&g_Converter, loopbackData.buffer, &frameCountToProcess, pInputOut, &frameCountOut);
 					}
 
-					ma_encoder_write_pcm_frames(encoderSecond, pInputOut, frameCountOut, nullptr);
+					ma_encoder_write_pcm_frames(&recorder->encoder[1], pInputOut, frameCountOut, nullptr);
 
 					delete[] loopbackData.buffer;
 				}
@@ -834,7 +834,7 @@ public:
 					ma_data_converter_process_pcm_frames__format_only(&g_Converter, microphoneData.buffer, &frameCountToProcess, pInputOut, &frameCountOut);
 				}
 
-				ma_encoder_write_pcm_frames(encoder, pInputOut, frameCountOut, nullptr);
+				ma_encoder_write_pcm_frames(&recorder->encoder[0], pInputOut, frameCountOut, nullptr);
 
 				delete[] microphoneData.buffer;
 			}
@@ -846,7 +846,7 @@ public:
 					ma_data_converter_process_pcm_frames__format_only(&g_Converter, loopbackData.buffer, &frameCountToProcess, pInputOut, &frameCountOut);
 				}
 
-				ma_encoder_write_pcm_frames(encoder, pInputOut, frameCountOut, nullptr);
+				ma_encoder_write_pcm_frames(&recorder->encoder[0], pInputOut, frameCountOut, nullptr);
 
 				delete[] loopbackData.buffer;
 			}
@@ -936,16 +936,10 @@ public:
 			g_Process |= PROCESS_LOOPBACK;
 		}
 		thread_shutdown.store(false);
-		if (make_stems) {
-			std::thread t(CAudioRecorder::MixingThread, &encoder[0], &encoder[1]);
-			t.detach();
-		}
-		else {
-			std::thread t(CAudioRecorder::MixingThread, &encoder[0], &encoder[0]);
-			t.detach();
-		}
-	}
+		std::thread t(CAudioRecorder::MixingThread, this);
+		t.detach();
 
+	}
 	void stop() {
 		if (g_Process & PROCESS_MICROPHONE) {
 			ma_device_uninit(&recording_device);
