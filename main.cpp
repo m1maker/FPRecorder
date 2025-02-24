@@ -78,7 +78,6 @@ d;\
 
 
 
-
 using namespace gui;
 enum EHotKey {
 	HOTKEY_STARTSTOP = 1,
@@ -355,16 +354,22 @@ static int ExecSystemCmd(const std::string& str, std::string& out)
 	}
 
 	// Run the command until the end, while capturing stdout
-	for (;;)
+	for (;g_Running;)
 	{
 		// Wait for a while to allow the process to work
 		YieldProcessor();
 		wait(5);
 		void;
 		DWORD ret = WaitForSingleObject(pi.hProcess, 50);
-
+		if (gui::try_close) {
+			int result = alert(L"FPWarning", L"You are attempting to close the program while it is converting a recording to another format. If the recording is lengthy, please wait a bit longer. If you believe the program has frozen and will not complete the conversion, click \"Yes\".", MB_YESNO | MB_ICONEXCLAMATION);
+			if (result = IDYES) {
+				g_Retcode = 0;
+				g_Running = false;
+			}
+		}
 		// Read from the stdout if there is any data
-		for (;;)
+		for (;g_Running;)
 		{
 			char buf[1024];
 			DWORD readCount = 0;
@@ -424,16 +429,117 @@ static std::vector<std::wstring> WINAPI get_files(std::wstring path) {
 
 
 
+static std::string ma_result_to_string(ma_result result) {
+	switch (result) {
+	case MA_SUCCESS:                        return "Success.";
+	case MA_ERROR:                          return "A generic error occurred.";
+	case MA_INVALID_ARGS:                   return "Invalid arguments were provided.";
+	case MA_INVALID_OPERATION:              return "The operation is not valid.";
+
+	case MA_OUT_OF_MEMORY:                  return "Out of memory.";
+	case MA_OUT_OF_RANGE:                   return "Value is out of range.";
+	case MA_ACCESS_DENIED:                  return "Access denied.";
+	case MA_DOES_NOT_EXIST:                 return "The specified item does not exist.";
+	case MA_ALREADY_EXISTS:                 return "The item already exists.";
+	case MA_TOO_MANY_OPEN_FILES:            return "Too many open files.";
+	case MA_INVALID_FILE:                   return "Invalid file format.";
+	case MA_TOO_BIG:                        return "The item is too big.";
+	case MA_PATH_TOO_LONG:                  return "The path is too long.";
+	case MA_NAME_TOO_LONG:                  return "The name is too long.";
+	case MA_NOT_DIRECTORY:                  return "Not a directory.";
+	case MA_IS_DIRECTORY:                   return "Is a directory.";
+	case MA_DIRECTORY_NOT_EMPTY:            return "Directory is not empty.";
+	case MA_AT_END:                         return "Reached the end of the file.";
+	case MA_NO_SPACE:                       return "No space left on device.";
+	case MA_BUSY:                           return "Resource is busy.";
+	case MA_IO_ERROR:                       return "An I/O error occurred.";
+	case MA_INTERRUPT:                      return "Operation was interrupted.";
+	case MA_UNAVAILABLE:                    return "Resource is unavailable.";
+	case MA_ALREADY_IN_USE:                 return "Resource is already in use.";
+	case MA_BAD_ADDRESS:                    return "Bad address.";
+	case MA_BAD_SEEK:                       return "Bad seek operation.";
+	case MA_BAD_PIPE:                       return "Bad pipe.";
+	case MA_DEADLOCK:                       return "Deadlock detected.";
+	case MA_TOO_MANY_LINKS:                 return "Too many links.";
+	case MA_NOT_IMPLEMENTED:                return "Operation not implemented.";
+	case MA_NO_MESSAGE:                     return "No message available.";
+	case MA_BAD_MESSAGE:                    return "Bad message received.";
+	case MA_NO_DATA_AVAILABLE:              return "No data available.";
+	case MA_INVALID_DATA:                   return "Invalid data received.";
+	case MA_TIMEOUT:                        return "Operation timed out.";
+	case MA_NO_NETWORK:                     return "No network available.";
+	case MA_NOT_UNIQUE:                     return "Not unique resource.";
+	case MA_NOT_SOCKET:                     return "Not a socket.";
+	case MA_NO_ADDRESS:                     return "No address found.";
+	case MA_BAD_PROTOCOL:                   return "Bad protocol specified.";
+	case MA_PROTOCOL_UNAVAILABLE:           return "Protocol is unavailable.";
+	case MA_PROTOCOL_NOT_SUPPORTED:         return "Protocol not supported.";
+	case MA_PROTOCOL_FAMILY_NOT_SUPPORTED:  return "Protocol family not supported.";
+	case MA_ADDRESS_FAMILY_NOT_SUPPORTED:   return "Address family not supported.";
+	case MA_SOCKET_NOT_SUPPORTED:           return "Socket type not supported.";
+	case MA_CONNECTION_RESET:               return "Connection was reset.";
+	case MA_ALREADY_CONNECTED:              return "Already connected.";
+	case MA_NOT_CONNECTED:                  return "Not connected.";
+	case MA_CONNECTION_REFUSED:             return "Connection refused.";
+	case MA_NO_HOST:                        return "No host found.";
+	case MA_IN_PROGRESS:                    return "Operation in progress.";
+	case MA_CANCELLED:                      return "Operation was cancelled.";
+	case MA_MEMORY_ALREADY_MAPPED:          return "Memory is already mapped.";
+
+		/* General non-standard errors. */
+	case MA_CRC_MISMATCH:                   return "CRC mismatch error.";
+
+		/* General miniaudio-specific errors. */
+
+	case MA_FORMAT_NOT_SUPPORTED:           return "Audio format not supported.";
+	case MA_DEVICE_TYPE_NOT_SUPPORTED:      return "Device type not supported.";
+	case MA_SHARE_MODE_NOT_SUPPORTED:       return "Share mode not supported for this device.";
+	case MA_NO_BACKEND:                     return "No backend available for audio playback.";
+	case MA_NO_DEVICE:                      return "No audio device available.";
+	case MA_API_NOT_FOUND:                  return "API not found for audio backend.";
+	case MA_INVALID_DEVICE_CONFIG:          return "Invalid device configuration specified.";
+	case MA_LOOP:                           return "Looping detected in operation.";
+	case MA_BACKEND_NOT_ENABLED:            return "Audio backend not enabled.";
+
+		/* State errors. */
+	case MA_DEVICE_NOT_INITIALIZED:         return "Audio device has not been initialized.";
+	case MA_DEVICE_ALREADY_INITIALIZED:     return "Audio device has already been initialized.";
+	case MA_DEVICE_NOT_STARTED:             return "Audio device has not been started.";
+	case MA_DEVICE_NOT_STOPPED:             return "Audio device has not been stopped.";
+
+		/* Operation errors. */
+	case MA_FAILED_TO_INIT_BACKEND:         return "Failed to initialize audio backend.";
+	case MA_FAILED_TO_OPEN_BACKEND_DEVICE:  return "Failed to open audio backend device.";
+	case MA_FAILED_TO_START_BACKEND_DEVICE: return "Failed to start audio backend device.";
+	case MA_FAILED_TO_STOP_BACKEND_DEVICE:  return "Failed to stop audio backend device.";
+
+	default:
+		return "Unknown error code.";
+	}
+	return "";
+}
+
+
+static void CheckIfError(ma_result result) {
+	if (result == MA_SUCCESS) {
+		return;
+	}
+	std::wstring error_u;
+	CStringUtils::UnicodeConvert(ma_result_to_string(result), error_u);
+	alert(L"Error", error_u, MB_ICONERROR);
+	g_Retcode = result;
+	g_Running = false;
+}
+
+
+
 
 
 class CAudioContext {
 	ma_context context;
 public:
 	CAudioContext() {
-		ma_result result;
-		if (ma_context_init(NULL, 0, NULL, &context) != MA_SUCCESS) {
-			alert(L"FPError", L"Failed to initialize context.");
-		}
+		CheckIfError(ma_context_init(NULL, 0, NULL, &context));
 	}
 
 	~CAudioContext() {
@@ -1679,6 +1785,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, wchar_t* lpCmd
 					CStringUtils::Replace(cmd, "%I", "\"" + rec.filename + ".wav\"", true);
 					CStringUtils::Replace(cmd, "%i", "\"" + split[0] + "\"", true);
 					CStringUtils::Replace(cmd, "%f", audio_format, true);
+					cmd.append(" -y"); // If ffmpeg will attempt to ask about overwrite, we add this flag to avoid stdin locks
 					int result = ExecSystemCmd(cmd, output);
 					if (result != 0) {
 						if (sound_events)g_SoundStream.PlayFromMemory(Error_wav, false);
