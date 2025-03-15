@@ -84,8 +84,9 @@ enum EHotKey {
 	HOTKEY_PAUSERESUME = 2,
 	HOTKEY_RESTART = 3
 };
-int g_Retcode = 0;
-bool g_Running = false;
+
+static int g_Retcode = 0;
+static bool g_Running = false;
 
 class CStringUtils {
 public:
@@ -363,7 +364,7 @@ static int ExecSystemCmd(const std::string& str, std::string& out)
 		DWORD ret = WaitForSingleObject(pi.hProcess, 50);
 		if (gui::try_close) {
 			int result = alert(L"FPWarning", L"You are attempting to close the program while it is converting a recording to another format. If the recording is lengthy, please wait a bit longer. If you believe the program has frozen and will not complete the conversion, click \"Yes\".", MB_YESNO | MB_ICONEXCLAMATION);
-			if (result = IDYES) {
+			if (result == IDYES) {
 				g_Retcode = 0;
 				g_Running = false;
 			}
@@ -520,13 +521,17 @@ static std::string ma_result_to_string(ma_result result) {
 }
 
 
+static ma_result g_MaLastError = MA_SUCCESS;
+
 static void CheckIfError(ma_result result) {
+	g_MaLastError = MA_SUCCESS;
 	if (result == MA_SUCCESS) {
 		return;
 	}
+	g_MaLastError = result;
 	std::wstring error_u;
 	CStringUtils::UnicodeConvert(ma_result_to_string(result), error_u);
-	alert(L"Error", error_u, MB_ICONERROR);
+	alert(L"FPRuntimeError", error_u, MB_ICONERROR);
 	g_Retcode = result;
 	g_Running = false;
 }
@@ -543,7 +548,7 @@ public:
 	}
 
 	~CAudioContext() {
-		ma_context_uninit(&context);
+		CheckIfError(ma_context_uninit(&context));
 	}
 	operator ma_context* () {
 		return &context;
@@ -587,18 +592,22 @@ public:
 			return ma_sound_start(&player) == MA_SUCCESS;
 		}
 		if (!m_EngineActive) {
-			if (ma_engine_init(nullptr, &mixer) == MA_SUCCESS)m_EngineActive = true;
+			CheckIfError(ma_engine_init(nullptr, &mixer));
+			if (g_MaLastError == MA_SUCCESS)
+				m_EngineActive = true;
 		}
 		if (m_SoundActive) {
 			ma_sound_uninit(&player);
 			m_SoundActive = false;
 		}
 		if (!m_SoundActive) {
-			ma_result result = ma_sound_init_from_file_w(&mixer, filename.c_str(), MA_SOUND_FLAG_NO_SPATIALIZATION, nullptr, nullptr, &player);
-			if (result == MA_SUCCESS)m_SoundActive = true;
-			if (result == MA_SUCCESS)ma_sound_start(&player);
-			current_file = filename;
-			return result == MA_SUCCESS;
+			CheckIfError(ma_sound_init_from_file_w(&mixer, filename.c_str(), MA_SOUND_FLAG_NO_SPATIALIZATION, nullptr, nullptr, &player));
+			if (g_MaLastError == MA_SUCCESS) {
+				m_SoundActive = true;
+				ma_sound_start(&player);
+				current_file = filename;
+			}
+			return g_MaLastError == MA_SUCCESS;
 		}
 		return false;
 	}
@@ -616,7 +625,9 @@ public:
 			m_Decoder = nullptr;
 		}
 		if (!m_EngineActive) {
-			if (ma_engine_init(nullptr, &mixer) == MA_SUCCESS)m_EngineActive = true;
+			CheckIfError(ma_engine_init(nullptr, &mixer));
+			if (g_MaLastError == MA_SUCCESS)
+				m_EngineActive = true;
 		}
 		if (m_SoundActive) {
 			ma_sound_uninit(&player);
@@ -624,16 +635,16 @@ public:
 		}
 		if (!m_SoundActive) {
 			if (m_Decoder == nullptr)m_Decoder = new ma_decoder;
-			ma_decoder_init_memory((void*)data, 13000, nullptr, m_Decoder); // For these are FPRecorder short sounds. It is normal allocation size for
-			ma_result result = ma_sound_init_from_data_source(&mixer, m_Decoder, MA_SOUND_FLAG_NO_SPATIALIZATION, nullptr, &player);
-			if (result == MA_SUCCESS)m_SoundActive = true;
-			if (result == MA_SUCCESS)ma_sound_start(&player);
+			CheckIfError(ma_decoder_init_memory((void*)data, 13000, nullptr, m_Decoder)); // For these are FPRecorder short sounds. It is normal allocation size for
+			CheckIfError(ma_sound_init_from_data_source(&mixer, m_Decoder, MA_SOUND_FLAG_NO_SPATIALIZATION, nullptr, &player));
+			if (g_MaLastError== MA_SUCCESS)m_SoundActive = true;
+			if (g_MaLastError == MA_SUCCESS)ma_sound_start(&player);
 			if (wait) {
 				while (ma_sound_is_playing(&player)) {
 					gui::wait(5);
 				}
 			}
-			return result == MA_SUCCESS;
+			return g_MaLastError == MA_SUCCESS;
 		}
 		return false;
 	}
@@ -759,7 +770,7 @@ public:
 	}
 };
 
-bool str_to_bool(const std::string& val) {
+static bool str_to_bool(const std::string& val) {
 	std::string str = CStringUtils::ToLowerCase(val);
 	if (str == "0" || str == "false") {
 		return false;
@@ -1004,12 +1015,7 @@ public:
 		microphoneQueue.clear();
 		loopbackQueue.clear();
 		ma_data_converter_config converter_config = ma_data_converter_config_init(ma_format_f32, buffer_format, channels, channels, sample_rate, sample_rate);
-		ma_result init_result = ma_data_converter_init(&converter_config, nullptr, &g_Converter);
-		if (init_result != MA_SUCCESS) {
-			alert(L"FPConverterInitializerError", L"Error initializing data converter.", MB_ICONERROR);
-			g_Retcode = -3;
-			g_Running = false;
-		}
+		CheckIfError(ma_data_converter_init(&converter_config, nullptr, &g_Converter));
 		std::wstring record_path_u;
 		CStringUtils::UnicodeConvert(record_path, record_path_u);
 		CreateDirectory(record_path_u.c_str(), nullptr);
@@ -1021,25 +1027,16 @@ public:
 		filename = file;
 
 		encoderConfig = ma_encoder_config_init(ma_encoding_format_wav, buffer_format, channels, sample_rate);
-		ma_result result = MA_SUCCESS;
 		if (make_stems) {
 			std::string stem;
 			stem = file + " Mic.wav";
-			result = ma_encoder_init_file(stem.c_str(), &encoderConfig, &encoder[0]);
+			CheckIfError(ma_encoder_init_file(stem.c_str(), &encoderConfig, &encoder[0]));
 			stem = file + " Loopback.wav";
-			if (result == MA_SUCCESS)
-				result = ma_encoder_init_file(stem.c_str(), &encoderConfig, &encoder[1]);
+			if (g_MaLastError== MA_SUCCESS)
+				CheckIfError(ma_encoder_init_file(stem.c_str(), &encoderConfig, &encoder[1]));
 		}
 		else {
-			result = ma_encoder_init_file(std::string(file + ".wav").c_str(), &encoderConfig, &encoder[0]);
-		}
-		if (result != MA_SUCCESS) {
-			std::wstring file_u;
-			CStringUtils::UnicodeConvert(file, file_u);
-			if (sound_events)		g_SoundStream.PlayFromMemory(Error_wav, false);
-			alert(L"FPEncoderInitializerError", L"Error initializing audio encoder for file \"" + file_u + L"\" with retcode " + std::to_wstring(result) + L".", MB_ICONERROR);
-			g_Retcode = result;
-			g_Running = false;
+			CheckIfError(ma_encoder_init_file(std::string(file + ".wav").c_str(), &encoderConfig, &encoder[0]));
 		}
 		if (g_CurrentInputDevice.name != L"Not used") {
 			deviceConfig = ma_device_config_init(ma_device_type_capture);
@@ -1052,14 +1049,8 @@ public:
 			deviceConfig.periods = periods;
 			deviceConfig.dataCallback = CAudioRecorder::MicrophoneCallback;
 			deviceConfig.pUserData = &encoder[0];
-			result = ma_device_init(g_AudioContext, &deviceConfig, &recording_device);
-			if (result != MA_SUCCESS) {
-				if (sound_events)		g_SoundStream.PlayFromMemory(Error_wav, false);
-				alert(L"FPAudioDeviceInitializerError", L"Error initializing audio device for \"" + g_CurrentInputDevice.name + L"\" with retcode " + std::to_wstring(result) + L".", MB_ICONERROR);
-				g_Retcode = result;
-				g_Running = false;
-			}
-			ma_device_start(&recording_device);
+			CheckIfError(ma_device_init(g_AudioContext, &deviceConfig, &recording_device));
+			CheckIfError(ma_device_start(&recording_device));
 			g_Process |= PROCESS_MICROPHONE;
 		}
 		if (g_CurrentOutputDevice.name != L"Not used") {
@@ -1072,14 +1063,8 @@ public:
 			loopbackDeviceConfig.dataCallback = CAudioRecorder::LoopbackCallback;
 			loopbackDeviceConfig.pUserData = make_stems ? &encoder[1] : &encoder[0];
 
-			result = ma_device_init(g_AudioContext, &loopbackDeviceConfig, &loopback_device);
-			if (result != MA_SUCCESS) {
-				if (sound_events)		g_SoundStream.PlayFromMemory(Error_wav, false);
-				alert(L"FPAudioDeviceInitializerError", L"Error initializing audio device for \"" + g_CurrentOutputDevice.name + L"\" with retcode " + std::to_wstring(result) + L".", MB_ICONERROR);
-				g_Retcode = result;
-				g_Running = false;
-			}
-			ma_device_start(&loopback_device);
+			CheckIfError(ma_device_init(g_AudioContext, &loopbackDeviceConfig, &loopback_device));
+			CheckIfError(ma_device_start(&loopback_device));
 			g_Process |= PROCESS_LOOPBACK;
 		}
 		thread_shutdown.store(false);
@@ -1144,17 +1129,13 @@ public:
 
 std::vector<audio_device> MA_API get_input_audio_devices()
 {
-	ma_result result;
 	std::vector<audio_device> audioDevices;
 	ma_device_info* pCaptureDeviceInfos;
 	ma_uint32 captureDeviceCount;
 	ma_uint32 iCaptureDevice;
 
-	result = ma_context_get_devices(g_AudioContext, nullptr, nullptr, &pCaptureDeviceInfos, &captureDeviceCount);
-	if (result != MA_SUCCESS) {
-		return audioDevices;
-	}
-	for (iCaptureDevice = 0; iCaptureDevice < captureDeviceCount; ++iCaptureDevice) {
+	CheckIfError(ma_context_get_devices(g_AudioContext, nullptr, nullptr, &pCaptureDeviceInfos, &captureDeviceCount));
+	for (iCaptureDevice = 0; g_MaLastError == MA_SUCCESS && iCaptureDevice < captureDeviceCount; ++iCaptureDevice) {
 		const char* name = pCaptureDeviceInfos[iCaptureDevice].name;
 		std::string name_str(name);
 		std::wstring name_str_u;
@@ -1169,17 +1150,13 @@ std::vector<audio_device> MA_API get_input_audio_devices()
 
 std::vector<audio_device> MA_API get_output_audio_devices()
 {
-	ma_result result;
 	std::vector<audio_device> audioDevices;
 	ma_device_info* pPlaybackDeviceInfos;
 	ma_uint32 playbackDeviceCount;
 	ma_uint32 iPlaybackDevice;
 
-	result = ma_context_get_devices(g_AudioContext, &pPlaybackDeviceInfos, &playbackDeviceCount, nullptr, nullptr);
-	if (result != MA_SUCCESS) {
-		return audioDevices;
-	}
-	for (iPlaybackDevice = 0; iPlaybackDevice < playbackDeviceCount; ++iPlaybackDevice) {
+	CheckIfError(ma_context_get_devices(g_AudioContext, &pPlaybackDeviceInfos, &playbackDeviceCount, nullptr, nullptr));
+	for (iPlaybackDevice = 0; g_MaLastError == MA_SUCCESS && iPlaybackDevice < playbackDeviceCount; ++iPlaybackDevice) {
 		const char* name = pPlaybackDeviceInfos[iPlaybackDevice].name;
 		std::string name_str(name);
 		std::wstring name_str_u;
@@ -1563,7 +1540,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, wchar_t* lpCmd
 			std::vector<std::string> presets_str = conf.get_keys("Presets");
 			if (presets_str.size() > 0) {
 				presets.clear();
-				for (unsigned int i = 0; i < presets_str.size(); i++) {
+				for (unsigned int i = 0; i < presets_str.size(); ++i) {
 					preset p;
 					p.name = presets_str[i];
 					p.command = conf.read("Presets", presets_str[i]);
@@ -1573,7 +1550,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, wchar_t* lpCmd
 			current_preset_name = conf.read("General", "current-preset");
 			bool preset_found = false;
 			unsigned int it;
-			for (it = 0; it < presets.size(); it++) {
+			for (it = 0; it < presets.size(); ++it) {
 				if (current_preset_name == presets[it].name) {
 					preset_found = true;
 					break;
@@ -1691,6 +1668,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, wchar_t* lpCmd
 				g_RecordManagerWindow.build();
 				if (sound_events)g_SoundStream.PlayFromMemory(Openmanager_wav);
 				g_RecordingsManager = true;
+				key_pressed(VK_SPACE);
 			}
 			if (g_RecordingsManager) {
 				if (key_down(VK_ESCAPE) or is_pressed(g_RecordManagerWindow.close_button)) {
@@ -1853,6 +1831,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, wchar_t* lpCmd
 	timeEndPeriod(1);
 	(void)hInstance;
 	(void)hPrevInstance;
+	g_MaLastError = MA_SUCCESS;
 	return g_Retcode; // Application exit
 }
 
