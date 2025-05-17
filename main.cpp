@@ -1,8 +1,6 @@
 #define _CRT_SECURE_NO_WARNINGS
 #include "gui/gui.h"
 #include "Provider.h"
-#include "readmeH.h"
-#include "resource1.h"
 #include "stdafx.h"
 #include "user_config.h"
 #include<assert.h>
@@ -1474,28 +1472,7 @@ static CSettingsWindow g_SettingsWindow;
 
 
 bool g_RecordingsManager = false;
-static LRESULT CALLBACK DialogProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
-{
-	switch (msg)
-	{
-	case WM_CLOSE: {
-		MessageBeep(MB_ICONERROR);
-		return TRUE;
-	}
-	case WM_INITDIALOG:
-		return TRUE;
-	case WM_COMMAND:
-		switch (LOWORD(wParam))
-		{
-		case IDOK:
-			EndDialog(window, 0);
-			DestroyWindow(window);
-			return TRUE;
-		}
-		return FALSE;
-	}
-	return false;
-}
+
 std::wstring WINAPI get_exe() {
 	wchar_t* filename = new wchar_t[500];
 	GetModuleFileNameW(nullptr, filename, 500);
@@ -1619,23 +1596,6 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, wchar_t* lpCmd
 		}
 	}
 	else if (result == -1) {
-		MessageBeep(0xFFFFFFFF);
-		window = CreateDialog(NULL, MAKEINTRESOURCE(IDD_DIALOG1), NULL, DialogProc);
-		if (!IsWindow(window)) {
-			alert(L"FPWelcomeDialogInitializerError", L"File: " + get_exe() + L"\\.rsrc\\DIALOG\\" + std::to_wstring(IDD_DIALOG1) + L" not found. Try to redownload the application", MB_ICONERROR);
-			g_Retcode = -4;
-			g_Running = false;
-		}
-		ShowWindow(window, SW_SHOW);
-		std::wstring README_u;
-		CStringUtils::UnicodeConvert(README, README_u);
-		SetDlgItemTextW(window, IDC_EDIT1, README_u.c_str());
-		while (g_Running && IsWindow(window)) {
-			update_window(window);
-			gui::wait(5);
-		}
-
-
 		conf.write("General", "sample-rate", std::to_string(sample_rate));
 		conf.write("General", "channels", std::to_string(channels));
 		conf.write("General", "buffer-size", std::to_string(buffer_size));

@@ -7,27 +7,11 @@
     <ClCompile Include="GUI\gui.cpp" />
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="Error.wav.h" />
     <ClInclude Include="miniaudio.h" />
-    <ClInclude Include="Openmanager.wav.h" />
-    <ClInclude Include="Pause.wav.h" />
-    <ClInclude Include="Restart.wav.h" />
-    <ClInclude Include="Start.wav.h" />
     <ClInclude Include="stb_vorbis.h" />
-    <ClInclude Include="Stop.wav.h" />
-    <ClInclude Include="Unpause.wav.h" />
     <ClInclude Include="user_config.h" />
     <ClInclude Include="Provider.h" />
     <ClInclude Include="stdafx.h" />
-    <ClInclude Include="resource.h" />
-    <ClInclude Include="resource1.h" />
     <ClInclude Include="GUI\gui.h" />
-    <ClInclude Include="readmeH.h" />
-  </ItemGroup>
-  <ItemGroup>
-    <ResourceCompile Include="FPRecorder.rc" />
-  </ItemGroup>
-  <ItemGroup>
-    <None Include="resource1.hm" />
   </ItemGroup>
 </Project>

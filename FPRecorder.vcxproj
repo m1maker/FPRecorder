@@ -139,28 +139,12 @@
     <ClCompile Include="stb_vorbis.c" />
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="Error.wav.h" />
     <ClInclude Include="GUI\gui.h" />
     <ClInclude Include="miniaudio.h" />
-    <ClInclude Include="Openmanager.wav.h" />
-    <ClInclude Include="Pause.wav.h" />
     <ClInclude Include="Provider.h" />
-    <ClInclude Include="readmeH.h" />
-    <ClInclude Include="resource.h" />
-    <ClInclude Include="resource1.h" />
-    <ClInclude Include="Restart.wav.h" />
-    <ClInclude Include="Start.wav.h" />
     <ClInclude Include="stb_vorbis.h" />
     <ClInclude Include="stdafx.h" />
-    <ClInclude Include="Stop.wav.h" />
-    <ClInclude Include="Unpause.wav.h" />
     <ClInclude Include="user_config.h" />
-  </ItemGroup>
-  <ItemGroup>
-    <ResourceCompile Include="FPRecorder.rc" />
-  </ItemGroup>
-  <ItemGroup>
-    <None Include="resource1.hm" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
