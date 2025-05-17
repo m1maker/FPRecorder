@@ -1296,7 +1296,7 @@ static void window_reset() {
 	g_Windows.clear();
 }
 
-static const std::wstring version = L"0.0.1 Alpha 2";
+static const std::wstring version = L"0.0.1 Beta";
 static CAudioRecorder rec;
 
 
