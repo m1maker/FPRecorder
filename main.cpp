@@ -1,18 +1,11 @@
 #pragma section("CONFIG", read, write)
 #define _CRT_SECURE_NO_WARNINGS
 #define _SILENCE_ALL_CXX17_DEPRECATION_WARNINGS
-#include "Error.wav.h"
 #include "gui/gui.h"
-#include "Openmanager.wav.h"
-#include "Pause.wav.h"
 #include "Provider.h"
 #include "readmeH.h"
 #include "resource1.h"
-#include "Restart.wav.h"
-#include "start.wav.h"
 #include "stdafx.h"
-#include "Stop.wav.h"
-#include "Unpause.wav.h"
 #include "user_config.h"
 #include<assert.h>
 #include <cctype>
@@ -29,7 +22,6 @@
 #include <tlhelp32.h>
 #include <UIAutomation.h>
 #include <Uiautomationcore.h>
-#define MA_NO_GENERATION
 #define MINIAUDIO_IMPLEMENTATION
 #include "miniaudio.h"
 #include <chrono>
@@ -74,6 +66,7 @@ inline std::optional<R> safeCallVal(T* obj, Func func, Args ...args) {
 		return std::nullopt;
 	}
 }
+
 
 using namespace gui;
 enum EHotKey {
@@ -596,7 +589,7 @@ public:
 	}
 
 	~CAudioContext() {
-		CheckIfError(ma_context_uninit(&*context));
+		ma_context_uninit(&*context);
 		context.reset();
 	}
 	operator ma_context* () {
@@ -614,11 +607,22 @@ static CAudioContext g_AudioContext;
 class CSoundStream {
 	std::unique_ptr<ma_engine> m_Engine;
 	std::unique_ptr<ma_sound> m_Player;
-	std::unique_ptr<ma_decoder> m_Decoder;
+	std::unique_ptr<ma_waveform> m_Waveform;
 	std::wstring current_file;
 public:
-	CSoundStream() : m_Engine(nullptr), m_Player(nullptr), m_Decoder(nullptr) {}
+	enum ESoundEvent {
+		SOUND_EVENT_NONE = 0,
+		SOUND_EVENT_START_RECORDING,
+		SOUND_EVENT_STOP_RECORDING,
+		SOUND_EVENT_PAUSE_RECORDING,
+		SOUND_EVENT_RESUME_RECORDING,
+		SOUND_EVENT_RESTART_RECORDING,
+		SOUND_EVENT_RECORD_MANAGER,
+		SOUND_EVENT_ERROR = -1,
+	};
+	CSoundStream() : m_Engine(nullptr), m_Player(nullptr), m_Waveform(nullptr) {}
 	~CSoundStream() {
+		Close();
 		if (m_Engine) {
 			ma_engine_uninit(&*m_Engine);
 			m_Engine.reset();
@@ -630,7 +634,10 @@ public:
 			return true;
 		}
 		m_Engine = std::make_unique<ma_engine>();
-		CheckIfError(ma_engine_init(nullptr, &*m_Engine));
+		ma_engine_config cfg = ma_engine_config_init();
+		cfg.sampleRate = sample_rate;
+		cfg.channels = channels;
+		CheckIfError(ma_engine_init(&cfg, &*m_Engine));
 		return g_MaLastError == MA_SUCCESS;
 	}
 
@@ -644,7 +651,7 @@ public:
 		Close();
 		if (!m_Player) {
 			m_Player = std::make_unique<ma_sound>();
-			g_MaLastError = ma_sound_init_from_file_w(&*m_Engine, filename.c_str(), MA_SOUND_FLAG_NO_SPATIALIZATION, nullptr, nullptr, &*m_Player);
+			g_MaLastError = ma_sound_init_from_file_w(&*m_Engine, filename.c_str(), MA_SOUND_FLAG_NO_SPATIALIZATION | MA_SOUND_FLAG_NO_PITCH, nullptr, nullptr, &*m_Player);
 			if (g_MaLastError == MA_SUCCESS) {
 				g_MaLastError = ma_sound_start(&*m_Player);
 				current_file = filename;
@@ -660,30 +667,58 @@ public:
 		return Play(filename_u);
 	}
 
-	bool PlayFromMemory(const unsigned char* data, bool wait = true) {
+	bool PlayEvent(const CSoundStream::ESoundEvent& evt) {
 		if (!Initialize()) {
 			return false;
 		}
 		Close();
 		if (!m_Player) {
-			if (m_Decoder)m_Decoder = std::make_unique<ma_decoder>();
-			g_MaLastError = ma_decoder_init_memory((void*)data, 13000, nullptr, &*m_Decoder); // For these are FPRecorder short sounds. It is normal allocation size for
-			g_MaLastError = ma_sound_init_from_data_source(&*m_Engine, &*m_Decoder, MA_SOUND_FLAG_NO_SPATIALIZATION, nullptr, &*m_Player);
-			if (g_MaLastError == MA_SUCCESS)g_MaLastError = ma_sound_start(&*m_Player);
-			if (wait) {
-				while (ma_sound_is_playing(&*m_Player)) {
-					gui::wait(5);
+			ma_waveform_config cfg = ma_waveform_config_init(ma_format_f32, ma_engine_get_channels(&*m_Engine), ma_engine_get_sample_rate(&*m_Engine), ma_waveform_type_sine, 1.0, 1200);
+			m_Waveform = std::make_unique<ma_waveform>();
+			g_MaLastError = ma_waveform_init(&cfg, &*m_Waveform);
+			if (g_MaLastError == MA_SUCCESS) {
+				m_Player = std::make_unique<ma_sound>();
+				g_MaLastError = ma_sound_init_from_data_source(&*m_Engine, (ma_data_source*)&*m_Waveform, MA_SOUND_FLAG_NO_SPATIALIZATION | MA_SOUND_FLAG_NO_PITCH, nullptr, &*m_Player);
+				if (g_MaLastError == MA_SUCCESS) {
+					g_MaLastError = ma_sound_start(&*m_Player);
 				}
 			}
+			ma_sleep(50);
+			ma_sound_stop(&*m_Player);
+			ma_sleep(20);
+			double freq = cfg.frequency;
+			switch (evt) {
+			case SOUND_EVENT_RECORD_MANAGER:
+				freq = freq + 50;
+				break;
+			case SOUND_EVENT_RESTART_RECORDING:
+				freq = freq != 0 ? freq / 2 : freq + 16 * 2;
+				break;
+			case SOUND_EVENT_RESUME_RECORDING:
+			case SOUND_EVENT_PAUSE_RECORDING:
+				freq = evt == SOUND_EVENT_RESUME_RECORDING ? freq + 130 : freq - 130;
+				break;
+			case SOUND_EVENT_START_RECORDING:
+			case SOUND_EVENT_STOP_RECORDING:
+				freq = evt == SOUND_EVENT_START_RECORDING ? freq + 200 : freq - 200;
+				break;
+			default:
+				freq = freq - 333;
+				break;
+			}
+			ma_waveform_set_frequency(&*m_Waveform, freq);
+			ma_sound_start(&*m_Player);
+			ma_sleep(50);
+			Close();
 			return g_MaLastError == MA_SUCCESS;
 		}
 		return false;
 	}
 
 	void Close() {
-		if (m_Decoder) {
-			ma_decoder_uninit(&*m_Decoder);
-			m_Decoder.reset();
+		if (m_Waveform) {
+			ma_waveform_uninit(&*m_Waveform);
+			m_Waveform.reset();
 		}
 		if (m_Player) {
 			ma_sound_uninit(&*m_Player);
@@ -844,6 +879,7 @@ static std::atomic<bool> paused = false;
 static ma_data_converter g_Converter;
 
 class MINIAUDIO_IMPLEMENTATION CAudioRecorder {
+	std::thread m_MixingThread;
 	ma_device_config deviceConfig;
 	ma_device_config loopbackDeviceConfig;
 	ma_encoder_config encoderConfig;
@@ -1065,8 +1101,8 @@ public:
 			g_Process |= PROCESS_LOOPBACK;
 		}
 		thread_shutdown.store(false);
-		std::thread t(CAudioRecorder::MixingThread, this);
-		t.detach();
+		m_MixingThread = std::thread(CAudioRecorder::MixingThread, this);
+		m_MixingThread.detach();
 
 	}
 	void stop() {
@@ -1090,6 +1126,9 @@ public:
 		thread_shutdown.store(true);
 		microphoneCondition.notify_one();
 		loopbackCondition.notify_one();
+		if (m_MixingThread.joinable()) {
+			m_MixingThread.join();
+		}
 		{
 			std::lock_guard<std::mutex> lock(microphoneMutex);
 			while (!microphoneQueue.empty()) {
@@ -1654,7 +1693,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, wchar_t* lpCmd
 			if (gui::try_close) {
 				gui::try_close = false;
 				if (g_Recording) {
-					if (sound_events)		g_SoundStream.PlayFromMemory(Error_wav, false);
+					if (sound_events)		g_SoundStream.PlayEvent(CSoundStream::SOUND_EVENT_ERROR);
 					g_SpeechProvider.Speak("Unable to exit, while recording.");
 					continue;
 				}
@@ -1670,7 +1709,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, wchar_t* lpCmd
 				conf.save();
 				g_MainWindow.reset();
 				g_RecordManagerWindow.build();
-				if (sound_events)g_SoundStream.PlayFromMemory(Openmanager_wav);
+				if (sound_events)		g_SoundStream.PlayEvent(CSoundStream::SOUND_EVENT_RECORD_MANAGER);
 				g_RecordingsManager = true;
 				g_SoundStream.Initialize();
 				key_pressed(VK_SPACE);
@@ -1688,7 +1727,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, wchar_t* lpCmd
 				CStringUtils::UnicodeConvert(record_path, record_path_u);
 				std::vector<wstring> files = get_files(record_path_u);
 				if (files.size() == 0) {
-					if (sound_events)		g_SoundStream.PlayFromMemory(Error_wav, false);
+					if (sound_events)		g_SoundStream.PlayEvent(CSoundStream::SOUND_EVENT_ERROR);
 					g_SpeechProvider.Speak("There are no files in \"" + record_path + "\".");
 					g_RecordManagerWindow.reset();
 					g_MainWindow.build();
@@ -1733,13 +1772,13 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, wchar_t* lpCmd
 				conf.write("General", "input-device", std::to_string(input_device));
 				conf.write("General", "loopback-device", std::to_string(loopback_device));
 				conf.save();
-				if (sound_events)g_SoundStream.PlayFromMemory(Start_wav);
+				if (sound_events)		g_SoundStream.PlayEvent(CSoundStream::SOUND_EVENT_START_RECORDING);
 				g_CurrentInputDevice = in_audio_devices[input_device];
 				g_CurrentOutputDevice = out_audio_devices[loopback_device];
 				if (g_CurrentInputDevice.name == L"Not used" && g_CurrentOutputDevice.name == L"Not used") {
-					if (sound_events)g_SoundStream.PlayFromMemory(Error_wav);
+					if (sound_events)		g_SoundStream.PlayEvent(CSoundStream::SOUND_EVENT_ERROR);
 					g_SpeechProvider.Speak("Can't record silence", true);
-					if (sound_events)g_SoundStream.PlayFromMemory(Stop_wav);
+					if (sound_events)		g_SoundStream.PlayEvent(CSoundStream::SOUND_EVENT_STOP_RECORDING);
 
 					continue;
 				}
@@ -1751,7 +1790,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, wchar_t* lpCmd
 			}
 			if (g_Recording && (is_pressed(g_RecordingWindow.record_stop) || hotkey_pressed(HOTKEY_STARTSTOP))) {
 				rec.stop();
-				if (sound_events)g_SoundStream.PlayFromMemory(Stop_wav);
+				if (sound_events)		g_SoundStream.PlayEvent(CSoundStream::SOUND_EVENT_STOP_RECORDING);
 				g_Recording = false;
 				g_RecordingWindow.reset();
 				if (audio_format == CStringUtils::ToLowerCase("jkm")) {
@@ -1771,7 +1810,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, wchar_t* lpCmd
 					cmd.append(" -y"); // If ffmpeg will attempt to ask about overwrite, we add this flag to avoid stdin locks
 					int result = ExecSystemCmd(cmd, output);
 					if (result != 0) {
-						if (sound_events)g_SoundStream.PlayFromMemory(Error_wav, false);
+						if (sound_events)		g_SoundStream.PlayEvent(CSoundStream::SOUND_EVENT_ERROR);
 						wstring output_u;
 						CStringUtils::UnicodeConvert(output, output_u);
 						alert(L"FPError", L"Process exit failure!\nRetcode: " + std::to_wstring(result) + L"\nOutput: \"" + output_u + L"\".", MB_ICONERROR);
@@ -1788,12 +1827,12 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, wchar_t* lpCmd
 			if (g_Recording && (is_pressed(g_RecordingWindow.record_pause) || hotkey_pressed(HOTKEY_PAUSERESUME))) {
 				if (!g_RecordingPaused) {
 					rec.pause();
-					if (sound_events)g_SoundStream.PlayFromMemory(Pause_wav);
+					if (sound_events)		g_SoundStream.PlayEvent(CSoundStream::SOUND_EVENT_PAUSE_RECORDING);
 					g_RecordingPaused = true;
 					set_text(g_RecordingWindow.record_pause, L"&Resume recording");
 				}
 				else if (g_RecordingPaused) {
-					if (sound_events)g_SoundStream.PlayFromMemory(Unpause_wav);
+					if (sound_events)		g_SoundStream.PlayEvent(CSoundStream::SOUND_EVENT_RESUME_RECORDING);
 					rec.resume();
 					g_RecordingPaused = false;
 					set_text(g_RecordingWindow.record_pause, L"&Pause recording");
@@ -1815,14 +1854,15 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, wchar_t* lpCmd
 				g_RecordingPaused = false;
 				set_text(g_RecordingWindow.record_pause, L"&Pause recording");
 				DeleteFile(recording_name_u.c_str());
-				if (sound_events)g_SoundStream.PlayFromMemory(Restart_wav);
+				if (sound_events)		g_SoundStream.PlayEvent(CSoundStream::SOUND_EVENT_RESTART_RECORDING);
+
 			}
 		}
 	}
 	catch (const std::exception& ex) {
 		std::wstring exception_u;
 		CStringUtils::UnicodeConvert(ex.what(), exception_u);
-		if (sound_events)g_SoundStream.PlayFromMemory(Error_wav, false);
+		if (sound_events)		g_SoundStream.PlayEvent(CSoundStream::SOUND_EVENT_ERROR);
 		alert(L"FPRuntimeError", exception_u.c_str(), MB_ICONERROR);
 		g_Running = false;
 		g_Retcode = -100;
@@ -1869,7 +1909,7 @@ LONG WINAPI ExceptionHandler(EXCEPTION_POINTERS* exceptionInfo) {
 	free(symbol);
 	std::wstring str_u;
 	CStringUtils::UnicodeConvert(ss.str(), str_u);
-	if (sound_events)g_SoundStream.PlayFromMemory(Error_wav, false);
+	if (sound_events)		g_SoundStream.PlayEvent(CSoundStream::SOUND_EVENT_ERROR);
 	alert(L"FPRuntimeError", str_u, MB_ICONERROR);
 	g_Retcode = -100;
 	g_Running = false; // In any situation, user should nott lost the record. Give application call audio recorder destructor to try uninitialize the encoder
