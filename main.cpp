@@ -1509,7 +1509,7 @@ public:
 
 		push(create_text(window, L"Buffer Size (ms, 0=default):", x_label, y_pos, label_width, ctrl_height, 0));
 		editBufferSize = create_input_box(window, false, false, x_control, y_pos, control_width, ctrl_height, 0); push(editBufferSize);
-		set_text(editBufferSize, std::to_wstring(sample_rate).c_str());
+		set_text(editBufferSize, std::to_wstring(buffer_size).c_str());
 		y_pos += ctrl_height + y_spacing;
 
 		push(create_text(window, L"Filename Signature:", x_label, y_pos, label_width, ctrl_height, 0));
