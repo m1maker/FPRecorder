@@ -1304,6 +1304,28 @@ static std::vector<audio_device> in_audio_devices;
 static std::vector < audio_device> out_audio_devices;
 
 
+static bool g_SettingsMode = false;
+
+static std::wstring get_list_item_text_by_index_internal(HWND list_hwnd, int index) {
+	if (!list_hwnd || index < 0) return L"";
+	int len = (int)SendMessage(list_hwnd, LB_GETTEXTLEN, (WPARAM)index, 0);
+	if (len == LB_ERR || len == 0) return L"";
+
+	std::vector<wchar_t> buffer(len + 1);
+	SendMessage(list_hwnd, LB_GETTEXT, (WPARAM)index, (LPARAM)buffer.data());
+	return std::wstring(buffer.data());
+}
+
+static void set_list_selection_by_text_internal(HWND list_hwnd, const std::wstring& text) {
+	if (!list_hwnd) return;
+	int count = (int)SendMessage(list_hwnd, LB_GETCOUNT, 0, 0);
+	for (int i = 0; i < count; ++i) {
+		if (get_list_item_text_by_index_internal(list_hwnd, i) == text) {
+			SendMessage(list_hwnd, LB_SETCURSEL, (WPARAM)i, 0);
+			return;
+		}
+	}
+}
 
 
 class CMainWindow : public IWindow {
@@ -1314,7 +1336,7 @@ public:
 	HWND output_devices_text = nullptr;
 	HWND output_devices_list = nullptr;
 	HWND record_manager = nullptr;
-
+	HWND settings_button = nullptr;
 
 	void build()override {
 		g_CurrentInputDevice.name = L"Default";
@@ -1361,7 +1383,8 @@ public:
 		set_list_position(output_devices_list, loopback_device);
 		record_manager = create_button(window, L"&Recordings manager", 10, 450, 200, 50, 0);
 		push(record_manager);
-		auto_size();
+		settings_button = create_button(window, L"&Settings", 10, 450 + 50 + 10, 200, 50, 0); // y = 510
+		push(settings_button);
 
 		focus(record_start);
 	}
@@ -1402,7 +1425,6 @@ public:
 		for (unsigned int i = 0; i < files.size(); i++) {
 			add_list_item(items_view_list, files[i].c_str());
 		}
-		auto_size();
 
 		focus(items_view_list);
 
@@ -1426,7 +1448,6 @@ public:
 		push(record_pause);
 		record_restart = create_button(window, L"&Restart recording", 230, 10, 100, 30, 0);
 		push(record_restart);
-		auto_size();
 
 		focus(record_stop);
 
@@ -1441,26 +1462,252 @@ public:
 };
 
 
-
-
-
 class CSettingsWindow : public IWindow {
 public:
-	HWND sample_rate = nullptr;
-	HWND record_path = nullptr;
-	HWND channels = nullptr;
-	HWND buffer_size = nullptr;
-	HWND filename_signature = nullptr;
-	HWND audio_format = nullptr;
-	HWND sound_events = nullptr;
-	HWND sample_format = nullptr;
-	HWND hotkey_start_stop = nullptr;
-	HWND hotkey_pause_resume = nullptr;
-	HWND hotkey_restart = nullptr;
-	HWND current_preset = nullptr;
-	void build() override {}
+	HWND lblSampleRate, editSampleRate;
+	HWND lblChannels, listChannels;
+	HWND lblBufferSize, editBufferSize;
+	HWND lblFilenameSignature, editFilenameSignature;
+	HWND lblRecordPath, editRecordPath, btnBrowseRecordPath;
+	HWND lblAudioFormat, listAudioFormat;
+	HWND chkSoundEvents;
+	HWND chkMakeStems;
+	HWND lblBufferFormat, listBufferFormat;
 
+	HWND lblHotkeyStartStop, editHotkeyStartStop;
+	HWND lblHotkeyPauseResume, editHotkeyPauseResume;
+	HWND lblHotkeyRestart, editHotkeyRestart;
+
+	HWND lblCurrentPreset, listCurrentPreset;
+
+	HWND btnSaveSettings;
+	HWND btnCancelSettings;
+
+	// Temp storage for hotkey parsing
+	std::string new_hotkey_start_stop, new_hotkey_pause_resume, new_hotkey_restart;
+
+
+	void build() override {
+		this->reset();
+
+		int x_label = 10, x_control = 160, x_button_browse = x_control + 210;
+		int y_pos = 10;
+		int ctrl_height = 25, list_height = 75, label_width = 140, control_width = 200;
+		int y_spacing = 5, section_spacing = 15;
+
+		push(create_text(window, L"Sample Rate (Hz):", x_label, y_pos, label_width, ctrl_height, 0));
+		editSampleRate = create_input_box(window, false, false, x_control, y_pos, control_width, ctrl_height, 0); push(editSampleRate);
+		set_text(editSampleRate, std::to_wstring(sample_rate).c_str());
+		y_pos += ctrl_height + y_spacing;
+
+		push(create_text(window, L"Channels:", x_label, y_pos, label_width, ctrl_height, 0));
+		listChannels = create_list(window, x_control, y_pos, control_width, list_height, 0); push(listChannels);
+		add_list_item(listChannels, L"1 (Mono)");
+		add_list_item(listChannels, L"2 (Stereo)");
+		set_list_position(listChannels, channels == 1 ? 0 : 1);
+		y_pos += list_height + y_spacing;
+
+		push(create_text(window, L"Buffer Size (ms, 0=default):", x_label, y_pos, label_width, ctrl_height, 0));
+		editBufferSize = create_input_box(window, false, false, x_control, y_pos, control_width, ctrl_height, 0); push(editBufferSize);
+		set_text(editBufferSize, std::to_wstring(sample_rate).c_str());
+		y_pos += ctrl_height + y_spacing;
+
+		push(create_text(window, L"Filename Signature:", x_label, y_pos, label_width, ctrl_height, 0));
+		std::wstring wsFilenameSig; CStringUtils::UnicodeConvert(filename_signature, wsFilenameSig);
+		editFilenameSignature = create_input_box(window, false, false, x_control, y_pos, control_width, ctrl_height, 0); push(editFilenameSignature);
+		set_text(editFilenameSignature, wsFilenameSig.c_str());
+		y_pos += ctrl_height + y_spacing;
+
+		push(create_text(window, L"Record Path:", x_label, y_pos, label_width, ctrl_height, 0));
+		std::wstring wsRecordPath; CStringUtils::UnicodeConvert(record_path, wsRecordPath);
+		editRecordPath = create_input_box(window, false, false, x_control, y_pos, control_width, ctrl_height, 0); push(editRecordPath);
+		set_text(editRecordPath, wsRecordPath.c_str());
+		btnBrowseRecordPath = create_button(window, L"...", x_button_browse, y_pos, 30, ctrl_height, 0); push(btnBrowseRecordPath);
+		y_pos += ctrl_height + y_spacing;
+
+		push(create_text(window, L"Audio Format:", x_label, y_pos, label_width, ctrl_height, 0));
+		listAudioFormat = create_list(window, x_control, y_pos, control_width, list_height, 0); push(listAudioFormat);
+		add_list_item(listAudioFormat, L"wav");
+		add_list_item(listAudioFormat, L"mp3");
+		add_list_item(listAudioFormat, L"flac");
+		std::wstring wsAudioFormat; CStringUtils::UnicodeConvert(audio_format, wsAudioFormat);
+		set_list_selection_by_text_internal(listAudioFormat, wsAudioFormat);
+		y_pos += list_height + y_spacing;
+
+		chkSoundEvents = create_checkbox(window, L"Enable Sound Events", x_label, y_pos, control_width + label_width, ctrl_height, 0); push(chkSoundEvents);
+		set_checkboxMark(chkSoundEvents, sound_events == MA_TRUE ? true : false);
+		y_pos += ctrl_height + y_spacing;
+
+		chkMakeStems = create_checkbox(window, L"Make Stems (Mic/Loopback separate files, WAV only)", x_label, y_pos, control_width + label_width + 50, ctrl_height, 0); push(chkMakeStems);
+		set_checkboxMark(chkMakeStems, make_stems == MA_TRUE ? true : false);
+		y_pos += ctrl_height + y_spacing;
+
+		push(create_text(window, L"Sample Format:", x_label, y_pos, label_width, ctrl_height, 0));
+		listBufferFormat = create_list(window, x_control, y_pos, control_width, list_height + 20, 0); push(listBufferFormat);
+		const char* formats[] = { "u8", "s16", "s24", "s32", "f32" };
+		for (const char* fmt_str : formats) {
+			std::wstring wfmt_str; CStringUtils::UnicodeConvert(std::string(fmt_str), wfmt_str);
+			add_list_item(listBufferFormat, wfmt_str.c_str());
+		}
+		std::wstring wsBufferFormat; CStringUtils::UnicodeConvert(ma_format_to_string(buffer_format), wsBufferFormat);
+		set_list_selection_by_text_internal(listBufferFormat, wsBufferFormat);
+		y_pos += list_height + 20 + section_spacing;
+
+		// --- Hotkey Settings ---
+		push(create_text(window, L"Start/Stop Hotkey:", x_label, y_pos, label_width, ctrl_height, 0));
+		std::wstring wsHkStartStop; CStringUtils::UnicodeConvert(hotkey_start_stop, wsHkStartStop);
+		editHotkeyStartStop = create_input_box(window, false, false, x_control, y_pos, control_width, ctrl_height, 0); push(editHotkeyStartStop);
+		set_text(editHotkeyStartStop, wsHkStartStop.c_str());
+		y_pos += ctrl_height + y_spacing;
+
+		push(create_text(window, L"Pause/Resume Hotkey:", x_label, y_pos, label_width, ctrl_height, 0));
+		std::wstring wsHkPauseResume; CStringUtils::UnicodeConvert(hotkey_pause_resume, wsHkPauseResume);
+		editHotkeyPauseResume = create_input_box(window, false, false, x_control, y_pos, control_width, ctrl_height, 0); push(editHotkeyPauseResume);
+		set_text(editHotkeyPauseResume, wsHkPauseResume.c_str());
+		y_pos += ctrl_height + y_spacing;
+
+		push(create_text(window, L"Restart Hotkey:", x_label, y_pos, label_width, ctrl_height, 0));
+		std::wstring wsHkRestart; CStringUtils::UnicodeConvert(hotkey_restart, wsHkRestart);
+		editHotkeyRestart = create_input_box(window, false, false, x_control, y_pos, control_width, ctrl_height, 0); push(editHotkeyRestart);
+		set_text(editHotkeyRestart, wsHkRestart.c_str());
+		y_pos += ctrl_height + section_spacing;
+
+		// --- Preset Settings ---
+		push(create_text(window, L"Current FFmpeg Preset:", x_label, y_pos, label_width, ctrl_height, 0));
+		listCurrentPreset = create_list(window, x_control, y_pos, control_width, list_height, 0); push(listCurrentPreset);
+		for (const auto& p : presets) {
+			std::wstring wp_name; CStringUtils::UnicodeConvert(p.name, wp_name);
+			add_list_item(listCurrentPreset, wp_name.c_str());
+		}
+		std::wstring wsCurrentPresetName; CStringUtils::UnicodeConvert(current_preset_name, wsCurrentPresetName);
+		set_list_selection_by_text_internal(listCurrentPreset, wsCurrentPresetName);
+		y_pos += list_height + section_spacing;
+
+		// --- Action Buttons ---
+		btnSaveSettings = create_button(window, L"&Save and Apply", x_label, y_pos, 150, 30, 0); push(btnSaveSettings);
+		btnCancelSettings = create_button(window, L"&Cancel", x_control + 60, y_pos, 100, 30, 0); push(btnCancelSettings);
+		y_pos += 30 + y_spacing;
+
+
+
+		focus(editSampleRate);
+	}
+
+	bool validate_and_prepare_settings() {
+		std::wstring ws_val = get_text(editSampleRate); std::string s_val; CStringUtils::UnicodeConvert(ws_val, s_val);
+		try { std::stoul(s_val); }
+		catch (const std::exception&) { alert(L"Validation Error", L"Invalid Sample Rate. Must be a positive number.", MB_ICONERROR); focus(editSampleRate); return false; }
+
+		ws_val = get_text(editBufferSize); CStringUtils::UnicodeConvert(ws_val, s_val);
+		try { std::stoul(s_val); }
+		catch (const std::exception&) { alert(L"Validation Error", L"Invalid Buffer Size. Must be a number.", MB_ICONERROR); focus(editBufferSize); return false; }
+
+		DWORD kmod_dummy; int kcode_dummy;
+		ws_val = get_text(editHotkeyStartStop); CStringUtils::UnicodeConvert(ws_val, new_hotkey_start_stop);
+		if (!parse_hotkey(new_hotkey_start_stop, kmod_dummy, kcode_dummy)) { alert(L"Validation Error", L"Invalid Start/Stop Hotkey format.", MB_ICONERROR); focus(editHotkeyStartStop); return false; }
+
+		ws_val = get_text(editHotkeyPauseResume); CStringUtils::UnicodeConvert(ws_val, new_hotkey_pause_resume);
+		if (!parse_hotkey(new_hotkey_pause_resume, kmod_dummy, kcode_dummy)) { alert(L"Validation Error", L"Invalid Pause/Resume Hotkey format.", MB_ICONERROR); focus(editHotkeyPauseResume); return false; }
+
+		ws_val = get_text(editHotkeyRestart); CStringUtils::UnicodeConvert(ws_val, new_hotkey_restart);
+		if (!parse_hotkey(new_hotkey_restart, kmod_dummy, kcode_dummy)) { alert(L"Validation Error", L"Invalid Restart Hotkey format.", MB_ICONERROR); focus(editHotkeyRestart); return false; }
+
+		ws_val = get_text(editRecordPath);
+		if (ws_val.empty()) { alert(L"Validation Error", L"Record path cannot be empty.", MB_ICONERROR); focus(editRecordPath); return false; }
+
+		// Audio Format vs Make Stems
+		int audio_fmt_idx = get_list_position(listAudioFormat);
+		std::wstring ws_audio_format_new = get_list_item_text_by_index_internal(listAudioFormat, audio_fmt_idx);
+		if (is_checked(chkMakeStems) && ws_audio_format_new != L"wav") {
+			alert(L"Validation Error", L"'Make Stems' is only supported with 'wav' audio format. Please change audio format to 'wav' or disable 'Make Stems'.", MB_ICONERROR);
+			return false;
+		}
+
+
+		return true;
+	}
+
+
+	void apply() {
+		std::wstring ws_val; std::string s_val;
+
+		ws_val = get_text(editSampleRate); CStringUtils::UnicodeConvert(ws_val, s_val);
+		sample_rate = std::stoul(s_val);
+		conf.write("General", "sample-rate", std::to_string(sample_rate));
+
+		channels = (get_list_position(listChannels) == 0) ? 1 : 2;
+		conf.write("General", "channels", std::to_string(channels));
+
+		ws_val = get_text(editBufferSize); CStringUtils::UnicodeConvert(ws_val, s_val);
+		buffer_size = std::stoul(s_val);
+		conf.write("General", "buffer-size", std::to_string(buffer_size));
+
+		ws_val = get_text(editFilenameSignature); CStringUtils::UnicodeConvert(ws_val, filename_signature);
+		conf.write("General", "filename-signature", filename_signature);
+
+		ws_val = get_text(editRecordPath); CStringUtils::UnicodeConvert(ws_val, record_path);
+		conf.write("General", "record-path", record_path);
+
+		int audio_fmt_idx = get_list_position(listAudioFormat);
+		std::wstring ws_audio_format_new = get_list_item_text_by_index_internal(listAudioFormat, audio_fmt_idx);
+		CStringUtils::UnicodeConvert(ws_audio_format_new, audio_format);
+		audio_format = CStringUtils::ToLowerCase(audio_format);
+		conf.write("General", "audio-format", audio_format);
+		if (audio_format != "wav") {
+			std::string output_ffmpeg_check;
+			if (ExecSystemCmd("ffmpeg.exe -h", output_ffmpeg_check) != 0) {
+				alert(L"FPFFMPegInitializerError", L"ffmpeg.exe not found or inaccessible. Non-WAV formats require FFmpeg. Please install FFmpeg and ensure it's in your system's PATH, or choose WAV format. Reverting to WAV.", MB_ICONERROR);
+				audio_format = "wav";
+				set_list_selection_by_text_internal(listAudioFormat, L"wav");
+				conf.write("General", "audio-format", audio_format);
+			}
+		}
+
+
+		sound_events = is_checked(chkSoundEvents) ? MA_TRUE : MA_FALSE;
+		conf.write("General", "sound-events", sound_events ? "true" : "false");
+
+		make_stems = is_checked(chkMakeStems) ? MA_TRUE : MA_FALSE;
+		conf.write("General", "make-stems", make_stems ? "true" : "false");
+
+		int buffer_fmt_idx = get_list_position(listBufferFormat);
+		std::wstring ws_buffer_format_new = get_list_item_text_by_index_internal(listBufferFormat, buffer_fmt_idx);
+		std::string s_buffer_format_new; CStringUtils::UnicodeConvert(ws_buffer_format_new, s_buffer_format_new);
+		try_parse_format(s_buffer_format_new.c_str(), buffer_format);
+		conf.write("General", "sample-format", ma_format_to_string(buffer_format));
+
+		UnregisterHotKey(nullptr, HOTKEY_STARTSTOP);
+		UnregisterHotKey(nullptr, HOTKEY_PAUSERESUME);
+		UnregisterHotKey(nullptr, HOTKEY_RESTART);
+
+		hotkey_start_stop = new_hotkey_start_stop;
+		conf.write("General", "hotkey-start-stop", hotkey_start_stop);
+		hotkey_pause_resume = new_hotkey_pause_resume;
+		conf.write("General", "hotkey-pause-resume", hotkey_pause_resume);
+		hotkey_restart = new_hotkey_restart;
+		conf.write("General", "hotkey-restart", hotkey_restart);
+
+		DWORD kmod; int kcode; // Re-declare to avoid scope issues if any
+		if (parse_hotkey(hotkey_start_stop, kmod, kcode)) RegisterHotKey(nullptr, HOTKEY_STARTSTOP, kmod, kcode);
+		if (parse_hotkey(hotkey_pause_resume, kmod, kcode)) RegisterHotKey(nullptr, HOTKEY_PAUSERESUME, kmod, kcode);
+		if (parse_hotkey(hotkey_restart, kmod, kcode)) RegisterHotKey(nullptr, HOTKEY_RESTART, kmod, kcode);
+
+		int preset_idx = get_list_position(listCurrentPreset);
+		std::wstring ws_preset_name_new = get_list_item_text_by_index_internal(listCurrentPreset, preset_idx);
+		CStringUtils::UnicodeConvert(ws_preset_name_new, current_preset_name);
+		conf.write("General", "current-preset", current_preset_name);
+		for (const auto& p : presets) {
+			if (p.name == current_preset_name) {
+				g_CurrentPreset = p;
+				break;
+			}
+		}
+
+		conf.save();
+	}
 };
+
+
 
 
 
@@ -1640,12 +1887,13 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, wchar_t* lpCmd
 		while (g_Running) {
 			wait(5);
 			update_window(window);
+
 			// Avoid invalid hotkey presses not in recording mode.
-			if (!g_Recording) {
+			if (!g_Recording || g_SettingsMode) {
 				hotkey_pressed(HOTKEY_PAUSERESUME);
 				hotkey_pressed(HOTKEY_RESTART);
 			}
-			if (g_RecordingsManager) {
+			if (g_RecordingsManager || g_SettingsMode) {
 				hotkey_pressed(HOTKEY_STARTSTOP);
 			}
 			if (gui::try_close) {
@@ -1659,6 +1907,70 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, wchar_t* lpCmd
 				g_Running = false;
 				break;
 			}
+			if (!g_Recording && !g_RecordingsManager && !g_SettingsMode && is_pressed(g_MainWindow.settings_button)) {
+				loopback_device = get_list_position(g_MainWindow.output_devices_list);
+				input_device = get_list_position(g_MainWindow.input_devices_list);
+				conf.write("General", "input-device", std::to_string(input_device));
+				conf.write("General", "loopback-device", std::to_string(loopback_device));
+
+				g_MainWindow.reset();
+				g_SettingsWindow.build();
+				g_SettingsMode = true;
+				g_SpeechProvider.Speak("Settings", false);
+			}
+
+			if (g_SettingsMode) {
+				if (is_pressed(g_SettingsWindow.btnCancelSettings) || key_down(VK_ESCAPE)) {
+					g_SettingsWindow.reset();
+					g_MainWindow.build();
+					focus(g_MainWindow.settings_button);
+					g_SettingsMode = false;
+					g_SpeechProvider.Speak("Canceled.", false);
+				}
+				else if (is_pressed(g_SettingsWindow.btnSaveSettings)) {
+					if (g_SettingsWindow.validate_and_prepare_settings()) {
+						g_SettingsWindow.apply();
+
+						g_SettingsWindow.reset();
+						g_MainWindow.build();
+						focus(g_MainWindow.settings_button);
+						g_SettingsMode = false;
+						g_SpeechProvider.Speak("Settings saved.", false);
+					}
+				}
+				else if (is_pressed(g_SettingsWindow.btnBrowseRecordPath)) {
+					OleInitialize(NULL);
+					BROWSEINFOW bi = { 0 };
+					bi.hwndOwner = window;
+					bi.lpszTitle = L"Select Recording Folder";
+					bi.ulFlags = BIF_RETURNONLYFSDIRS | BIF_NEWDIALOGSTYLE | BIF_USENEWUI;
+
+					wchar_t currentPathBuffer[MAX_PATH];
+					std::wstring wsCurrentPath = get_text(g_SettingsWindow.editRecordPath);
+					wcsncpy_s(currentPathBuffer, wsCurrentPath.c_str(), MAX_PATH - 1);
+
+					auto browseCallback = [](HWND hwnd, UINT uMsg, LPARAM lParam, LPARAM lpData) -> int {
+						if (uMsg == BFFM_INITIALIZED) {
+							SendMessage(hwnd, BFFM_SETSELECTION, TRUE, lpData);
+						}
+						return 0;
+						};
+					bi.lpfn = browseCallback;
+					bi.lParam = (LPARAM)currentPathBuffer;
+
+
+					LPITEMIDLIST pidl = SHBrowseForFolderW(&bi);
+					if (pidl != nullptr) {
+						wchar_t path_buffer[MAX_PATH];
+						if (SHGetPathFromIDListW(pidl, path_buffer)) {
+							set_text(g_SettingsWindow.editRecordPath, path_buffer);
+						}
+						CoTaskMemFree(pidl);
+					}
+					OleUninitialize();
+				}
+			}
+
 			if (is_pressed(g_MainWindow.record_manager) and !g_RecordingsManager) {
 				loopback_device = get_list_position(g_MainWindow.output_devices_list);
 				input_device = get_list_position(g_MainWindow.input_devices_list);
