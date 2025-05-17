@@ -1,6 +1,4 @@
-#pragma section("CONFIG", read, write)
 #define _CRT_SECURE_NO_WARNINGS
-#define _SILENCE_ALL_CXX17_DEPRECATION_WARNINGS
 #include "gui/gui.h"
 #include "Provider.h"
 #include "readmeH.h"
@@ -605,7 +603,7 @@ static CAudioContext g_AudioContext;
 
 
 class CSoundStream {
-	std::unique_ptr<ma_engine> m_Engine;
+	std::shared_ptr<ma_engine> m_Engine;
 	std::unique_ptr<ma_sound> m_Player;
 	std::unique_ptr<ma_waveform> m_Waveform;
 	std::wstring current_file;
@@ -633,7 +631,7 @@ public:
 		if (m_Engine) {
 			return true;
 		}
-		m_Engine = std::make_unique<ma_engine>();
+		m_Engine = std::make_shared<ma_engine>();
 		ma_engine_config cfg = ma_engine_config_init();
 		cfg.sampleRate = sample_rate;
 		cfg.channels = channels;
@@ -673,7 +671,7 @@ public:
 		}
 		Close();
 		if (!m_Player) {
-			ma_waveform_config cfg = ma_waveform_config_init(ma_format_f32, ma_engine_get_channels(&*m_Engine), ma_engine_get_sample_rate(&*m_Engine), ma_waveform_type_sine, 1.0, 1200);
+			ma_waveform_config cfg = ma_waveform_config_init(ma_format_f32, ma_engine_get_channels(&*m_Engine), ma_engine_get_sample_rate(&*m_Engine), ma_waveform_type_sine, 0.3, 1200);
 			m_Waveform = std::make_unique<ma_waveform>();
 			g_MaLastError = ma_waveform_init(&cfg, &*m_Waveform);
 			if (g_MaLastError == MA_SUCCESS) {
@@ -683,9 +681,9 @@ public:
 					g_MaLastError = ma_sound_start(&*m_Player);
 				}
 			}
-			ma_sleep(50);
+			gui::wait(20);
 			ma_sound_stop(&*m_Player);
-			ma_sleep(20);
+			gui::wait(20);
 			double freq = cfg.frequency;
 			switch (evt) {
 			case SOUND_EVENT_RECORD_MANAGER:
@@ -708,7 +706,7 @@ public:
 			}
 			ma_waveform_set_frequency(&*m_Waveform, freq);
 			ma_sound_start(&*m_Player);
-			ma_sleep(50);
+			gui::wait(30);
 			Close();
 			return g_MaLastError == MA_SUCCESS;
 		}
