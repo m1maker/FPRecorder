@@ -1469,7 +1469,7 @@ public:
 	HWND lblBufferSize, editBufferSize;
 	HWND lblFilenameSignature, editFilenameSignature;
 	HWND lblRecordPath, editRecordPath, btnBrowseRecordPath;
-	HWND lblAudioFormat, listAudioFormat;
+	HWND lblAudioFormat, editAudioFormat;
 	HWND chkSoundEvents;
 	HWND chkMakeStems;
 	HWND lblBufferFormat, listBufferFormat;
@@ -1526,13 +1526,11 @@ public:
 		y_pos += ctrl_height + y_spacing;
 
 		push(create_text(window, L"Audio Format:", x_label, y_pos, label_width, ctrl_height, 0));
-		listAudioFormat = create_list(window, x_control, y_pos, control_width, list_height, 0); push(listAudioFormat);
-		add_list_item(listAudioFormat, L"wav");
-		add_list_item(listAudioFormat, L"mp3");
-		add_list_item(listAudioFormat, L"flac");
 		std::wstring wsAudioFormat; CStringUtils::UnicodeConvert(audio_format, wsAudioFormat);
-		set_list_selection_by_text_internal(listAudioFormat, wsAudioFormat);
-		y_pos += list_height + y_spacing;
+
+		editAudioFormat = create_input_box(window, false, false, x_control, y_pos, control_width, ctrl_height, 0); push(editAudioFormat);
+		set_text(editAudioFormat, wsAudioFormat.c_str());
+		y_pos += ctrl_height + y_spacing;
 
 		chkSoundEvents = create_checkbox(window, L"Enable Sound Events", x_label, y_pos, control_width + label_width, ctrl_height, 0); push(chkSoundEvents);
 		set_checkboxMark(chkSoundEvents, sound_events == MA_TRUE ? true : false);
@@ -1616,9 +1614,9 @@ public:
 		if (ws_val.empty()) { alert(L"Validation Error", L"Record path cannot be empty.", MB_ICONERROR); focus(editRecordPath); return false; }
 
 		// Audio Format vs Make Stems
-		int audio_fmt_idx = get_list_position(listAudioFormat);
-		std::wstring ws_audio_format_new = get_list_item_text_by_index_internal(listAudioFormat, audio_fmt_idx);
-		if (is_checked(chkMakeStems) && ws_audio_format_new != L"wav") {
+		ws_val = get_text(editAudioFormat);
+		if (ws_val.empty()) { alert(L"Validation Error", L"Audio format cannot be empty.", MB_ICONERROR); focus(editAudioFormat); return false; }
+		if (is_checked(chkMakeStems) && ws_val != L"wav") {
 			alert(L"Validation Error", L"'Make Stems' is only supported with 'wav' audio format. Please change audio format to 'wav' or disable 'Make Stems'.", MB_ICONERROR);
 			return false;
 		}
@@ -1648,9 +1646,7 @@ public:
 		ws_val = get_text(editRecordPath); CStringUtils::UnicodeConvert(ws_val, record_path);
 		conf.write("General", "record-path", record_path);
 
-		int audio_fmt_idx = get_list_position(listAudioFormat);
-		std::wstring ws_audio_format_new = get_list_item_text_by_index_internal(listAudioFormat, audio_fmt_idx);
-		CStringUtils::UnicodeConvert(ws_audio_format_new, audio_format);
+		ws_val = get_text(editAudioFormat); CStringUtils::UnicodeConvert(ws_val, audio_format);
 		audio_format = CStringUtils::ToLowerCase(audio_format);
 		conf.write("General", "audio-format", audio_format);
 		if (audio_format != "wav") {
@@ -1658,7 +1654,7 @@ public:
 			if (ExecSystemCmd("ffmpeg.exe -h", output_ffmpeg_check) != 0) {
 				alert(L"FPFFMPegInitializerError", L"ffmpeg.exe not found or inaccessible. Non-WAV formats require FFmpeg. Please install FFmpeg and ensure it's in your system's PATH, or choose WAV format. Reverting to WAV.", MB_ICONERROR);
 				audio_format = "wav";
-				set_list_selection_by_text_internal(listAudioFormat, L"wav");
+				set_text(editAudioFormat, L"wav");
 				conf.write("General", "audio-format", audio_format);
 			}
 		}
