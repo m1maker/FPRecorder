@@ -8,8 +8,9 @@ FPRecorder is a Windows application designed for capturing audio from your micro
 
 *   **Dual Audio Source Recording:** Record from your microphone, system audio (what you hear), or both simultaneously.
 *   **Stem Recording:** Option to save microphone and loopback audio into separate files when recording both.
-*   **GUI Interface:** Easy-to-use windows for starting/stopping recordings, managing devices, and accessing recorded files.
+*   **GUI Interface:** Easy-to-use windows for starting/stopping recordings, managing devices, accessing settings, and managing recorded files.
 *   **Recordings Manager:** Built-in tool to browse, play, and delete your recordings.
+*   **Settings Window:** Configure various aspects of recording, output, and hotkeys through a dedicated GUI.
 *   **Hotkey Support:** Control recording (start/stop, pause/resume, restart) without needing the application window in focus.
 *   **Configurable Output:**
     *   Set sample rate, channels, and buffer size.
@@ -19,7 +20,7 @@ FPRecorder is a Windows application designed for capturing audio from your micro
 *   **FFmpeg Integration:** Convert recordings from WAV to other formats (MP3, OGG, FLAC, etc.) using custom FFmpeg commands via presets.
 *   **Audio & Speech Feedback:** Optional sound cues and screen reader announcements for important actions.
 *   **Command-Line Options:** Start recording automatically or specify a filename on launch.
-*   **Configuration File:** Fine-tune settings via an `fp.ini` file.
+*   **Configuration File:** Fine-tune settings via an `fp.ini` file; settings made in the GUI are saved here.
 
 ## 2. System Requirements
 
@@ -49,6 +50,7 @@ The main window is your central hub for starting recordings and managing devices
     *   `Not used`: Disables system audio (loopback) recording for this session.
     *   Select the device whose output you want to capture (e.g., your speakers or headphones).
 *   **Recordings manager Button:** Opens a window to manage your saved recordings.
+*   **Settings Button:** Opens the Settings window to configure application behavior.
 
 ## 5. Recording Audio
 
@@ -79,7 +81,7 @@ You can control recording even when FPRecorder is not the active window using gl
 *   **Pause/Resume Recording:** `Windows + Shift + F2` (Default)
 *   **Restart Recording:** `Windows + Shift + F3` (Default)
 
-*(These can be changed in `fp.ini`)*
+*(These can be changed in the Settings window or `fp.ini`)*
 
 ### File Naming and Location
 
@@ -100,9 +102,67 @@ Click the **Recordings manager** button on the main window to access your record
 *   **Close Button:** Closes the Recordings Manager and returns to the main window.
 *   You can also use `Spacebar` to play/pause when a file is selected in the list, and `Delete` key to delete. Press `Escape` to close the manager.
 
-## 7. Advanced: Configuration (`fp.ini`)
+## 7. Settings Window
 
-FPRecorder's behavior can be customized by editing the `fp.ini` file located in the same directory as `FPRecorder.exe`. Open it with a text editor.
+Click the **Settings** button on the main window to open the Settings window. Here you can configure various aspects of FPRecorder. Changes made here are saved to the `fp.ini` file when you click "Save and Apply".
+
+*   **Sample Rate (Hz):**
+    *   Sets the audio sample rate for recordings (e.g., `44100`, `48000`).
+    *   Higher values mean better quality but larger file sizes.
+    *   Default: `44100`
+*   **Channels:**
+    *   Sets the number of audio channels: `1 (Mono)` or `2 (Stereo)`.
+    *   Default: `2 (Stereo)`
+*   **Buffer Size (ms, 0=default):**
+    *   Audio buffer size in milliseconds. Lower values can reduce latency but might cause issues (like glitches or dropouts) on slower systems.
+    *   Setting to `0` lets the system/driver choose a default buffer size.
+    *   Default: `0`
+*   **Filename Signature:**
+    *   Defines the pattern for naming recorded files. It uses `strftime` format codes (e.g., `%Y` for year, `%m` for month, `%d` for day, `%H` for hour, `%M` for minute, `%S` for second).
+    *   Default: `%Y %m %d %H %M %S` (e.g., "2023 10 27 14 30 55")
+*   **Record Path:**
+    *   The folder where recordings will be saved.
+    *   Can be a relative path (e.g., `recordings`) or an absolute path (e.g., `C:\MyRecordings`).
+    *   Click the "..." button to browse for a folder.
+    *   Default: `recordings`
+*   **Audio Format:**
+    *   Select the desired *final* audio format for your recordings.
+    *   `wav`: Saves directly as a WAV file.
+    *   Other formats (e.g., `mp3`, `flac`): Records as a temporary WAV file first, then uses FFmpeg (via the "Current FFmpeg Preset") to convert to the selected format. The original WAV is then deleted if conversion is successful. FFmpeg must be installed and accessible.
+    *   Default: `wav`
+*   **Enable Sound Events (Checkbox):**
+    *   If checked, FPRecorder will play short sound cues (beeps) for actions like starting/stopping recording.
+    *   Default: `Enabled`
+*   **Make Stems (Checkbox):**
+    *   If checked, and you are recording both microphone and loopback audio simultaneously, they will be saved as two separate WAV files (e.g., `filename Mic.wav` and `filename Loopback.wav`).
+    *   If unchecked, they are mixed into a single file.
+    *   This option only applies if "Audio Format" is set to `wav`.
+    *   Default: `Disabled`
+*   **Sample Format:**
+    *   Determines the bit depth and data type of the recorded WAV file.
+    *   Options: `u8` (unsigned 8-bit), `s16` (signed 16-bit), `s24` (signed 24-bit), `s32` (signed 32-bit), `f32` (32-bit floating point).
+    *   Higher bit depths offer greater dynamic range. `s16` is common for general use, `f32` is often preferred for professional audio work due to its headroom.
+    *   Default: `s16`
+*   **Hotkey Settings:**
+    *   **Start/Stop Hotkey:** Defines the global hotkey to start or stop recording.
+        *   Format: `Modifier+Key` (e.g., `Windows+Shift+F1`, `Control+Alt+R`).
+        *   Modifiers: `Control`, `Alt`, `Shift`, `Windows`.
+        *   Default: `Windows+Shift+F1`
+    *   **Pause/Resume Hotkey:** Defines the global hotkey to pause or resume recording.
+        *   Default: `Windows+Shift+F2`
+    *   **Restart Hotkey:** Defines the global hotkey to restart a recording (stops current, deletes it, and starts new).
+        *   Default: `Windows+Shift+F3`
+*   **Current FFmpeg Preset:**
+    *   Selects the FFmpeg preset to use for conversion if "Audio Format" is not `wav`.
+    *   Presets define the FFmpeg command-line arguments for conversion. They are configured in the `[Presets]` section of `fp.ini`.
+    *   Default: `Default` (which typically performs a basic conversion to the target format).
+
+*   **Save and Apply Button:** Saves all changes made in the Settings window to `fp.ini` and applies them immediately (including re-registering hotkeys).
+*   **Cancel Button:** Closes the Settings window without saving any changes made in the current session.
+
+## 8. Advanced: Configuration (`fp.ini`)
+
+FPRecorder's behavior can be customized by editing the `fp.ini` file located in the same directory as `FPRecorder.exe`. Open it with a text editor. Many of these settings can also be configured through the **Settings Window** (see section 7).
 
 The file is organized into sections (e.g., `[General]`, `[Presets]`).
 
@@ -122,9 +182,9 @@ The file is organized into sections (e.g., `[General]`, `[Presets]`).
     *   `wav`: Saves directly as a WAV file.
     *   Other formats (e.g., `mp3`, `ogg`, `flac`): Records as WAV first, then uses FFmpeg (via the `current-preset`) to convert to this format. The original WAV is then deleted.
     *   Default: `wav`
-*   `input-device`: Index of the default input device selected in the list (0-based).
+*   `input-device`: Index of the default input device selected in the list (0-based). *This is primarily for remembering the last selection and not typically manually edited.*
     *   Default: `0`
-*   `loopback-device`: Index of the default loopback device selected in thelist (0-based).
+*   `loopback-device`: Index of the default loopback device selected in thelist (0-based). *This is primarily for remembering the last selection and not typically manually edited.*
     *   Default: `0` (often "Not used" initially or if only one output)
 *   `sound-events`: Enable (`true`) or disable (`false`) beeps for actions like start/stop recording.
     *   Default: `true`
@@ -162,9 +222,9 @@ This section defines FFmpeg commands for converting audio. Each line is a `Prese
     Default = ffmpeg.exe -i "%I" "%i.%f"
     MP3_HighQuality = ffmpeg.exe -i "%I" -q:a 2 "%i.mp3"
     ```
-    To use `MP3_HighQuality`, you would set `current-preset = MP3_HighQuality` and `audio-format = mp3` in the `[General]` section.
+    To use `MP3_HighQuality`, you would set `current-preset = MP3_HighQuality` and `audio-format = mp3` in the `[General]` section (or select it in the Settings window).
 
-## 8. Command-Line Options
+## 9. Command-Line Options
 
 You can launch `FPRecorder.exe` with these options:
 
@@ -173,9 +233,9 @@ You can launch `FPRecorder.exe` with these options:
     *   Example: `FPRecorder.exe --start -f "MyMeetingAudio"`
 *   `--exit`: If specified, the program will automatically exit after a recording (started via `--start` or a hotkey) is stopped.
 
-## 9. FFmpeg Integration (Detailed)
+## 10. FFmpeg Integration (Detailed)
 
-FPRecorder records audio to a temporary WAV file first. If `audio-format` in `fp.ini` is set to something other than `wav` (e.g., `mp3`), FPRecorder will then:
+FPRecorder records audio to a temporary WAV file first. If `audio-format` (configured in the Settings window or `fp.ini`) is set to something other than `wav` (e.g., `mp3`), FPRecorder will then:
 
 1.  Look up the command associated with `current-preset` in the `[Presets]` section of `fp.ini`.
 2.  Replace the placeholders (`%I`, `%i`, `%f`) in that command.
@@ -185,7 +245,11 @@ FPRecorder records audio to a temporary WAV file first. If `audio-format` in `fp
 
 **Example: Converting to Ogg Vorbis at ~128kbps**
 
-1.  **Edit `fp.ini`:**
+1.  **Open the Settings Window:**
+    *   Set **Audio Format** to `ogg`.
+    *   Set **Current FFmpeg Preset** to `OggVorbis_128k` (you'll need to define this preset in `fp.ini` first).
+    *   Click "Save and Apply".
+2.  **Or, Edit `fp.ini`:**
     ```ini
     [General]
     ; ... other settings ...
@@ -197,12 +261,12 @@ FPRecorder records audio to a temporary WAV file first. If `audio-format` in `fp
     Default = ffmpeg.exe -i "%I" "%i.%f"
     OggVorbis_128k = ffmpeg.exe -i "%I" -c:a libvorbis -qscale:a 4 "%i.ogg"
     ```
-2.  Ensure `ffmpeg.exe` is accessible.
-3.  Start a recording. When you stop it, FPRecorder will run:
+3.  Ensure `ffmpeg.exe` is accessible.
+4.  Start a recording. When you stop it, FPRecorder will run:
     `ffmpeg.exe -i "path/to/your/temp_file.wav" -c:a libvorbis -qscale:a 4 "path/to/your/temp_file.ogg"`
     And then delete `temp_file.wav`.
 
-## 10. Troubleshooting
+## 11. Troubleshooting
 
 *   **"FFmpeg ... Get exit code 0 failed" or "Process exit failure!":**
     *   FFmpeg is not found: Ensure `ffmpeg.exe` is in your system PATH or in the same directory as `FPRecorder.exe`.
@@ -218,9 +282,10 @@ FPRecorder records audio to a temporary WAV file first. If `audio-format` in `fp
 *   **"FPRuntimeError ... Access violation (segmentation fault)":**
     *   This is a program crash. The error message includes a stack trace which can be helpful for debugging if you report the issue to the developer. Try to note what you were doing when it happened.
 *   **Hotkeys Not Working:**
-    *   Ensure the hotkey definition in `fp.ini` is correct.
+    *   Ensure the hotkey definition in the Settings window or `fp.ini` is correct.
     *   Another application might be using the same global hotkey. Try a different combination.
     *   Run FPRecorder as Administrator if other applications with higher privileges are intercepting hotkeys (though generally not recommended unless necessary).
+*   **Settings window changes not taking effect:**
+    *   Ensure you clicked "Save and Apply" in the Settings window. Changes are not applied if you only click "Cancel" or close the window.
 
 ---
-
