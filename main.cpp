@@ -14,6 +14,7 @@
 #include <locale>
 #include<mutex>
 #include <ole2.h>
+#include <shellapi.h>
 #include <shlobj_core.h>
 #include <tlhelp32.h>
 #include <UIAutomation.h>
@@ -69,7 +70,8 @@ using namespace gui;
 enum EHotKey {
 	HOTKEY_STARTSTOP = 1,
 	HOTKEY_PAUSERESUME = 2,
-	HOTKEY_RESTART = 3
+	HOTKEY_RESTART = 3,
+	HOTKEY_HIDESHOW = 4
 };
 
 
@@ -224,6 +226,8 @@ static const ma_uint32 periods = 256;
 static std::string hotkey_start_stop = "Windows+Shift+F1";
 static std::string hotkey_pause_resume = "Windows+Shift+F2";
 static std::string hotkey_restart = "Windows+Shift+F3";
+static std::string hotkey_hide_show = "Windows+Shift+F4";
+
 static const preset g_DefaultPreset = { "Default", "ffmpeg.exe -i %I %i.%f" };
 static std::string current_preset_name = "Default";
 static user_config conf("fp.ini");
@@ -579,7 +583,7 @@ public:
 		ma_context_uninit(&*context);
 		context.reset();
 	}
-	operator ma_context* () {
+	inline operator ma_context* () {
 		return &*context;
 	}
 };
@@ -596,7 +600,7 @@ class MINIAUDIO_IMPLEMENTATION CSoundStream {
 	std::unique_ptr<ma_waveform> m_Waveform;
 	std::wstring current_file;
 public:
-	enum ESoundEvent {
+	enum ESoundEvent : std::uint8_t {
 		SOUND_EVENT_NONE = 0,
 		SOUND_EVENT_START_RECORDING,
 		SOUND_EVENT_STOP_RECORDING,
@@ -636,11 +640,11 @@ public:
 		return Uninitialize() && Initialize();
 	}
 
-	operator ma_sound* () {
+	inline operator ma_sound* () {
 		return &*m_Player;
 	}
 
-	operator ma_engine* () {
+	inline operator ma_engine* () {
 		return &*m_Engine;
 	}
 
@@ -1326,9 +1330,10 @@ public:
 	HWND settings_button = nullptr;
 
 	void build()override {
+		std::wstring wsHkStartStop; CStringUtils::UnicodeConvert(hotkey_start_stop, wsHkStartStop);
 		g_CurrentInputDevice.name = L"Default";
 		g_CurrentOutputDevice.name = L"Not used";
-		record_start = create_button(window, L"&Start recording", 10, 10, 200, 50, 0);
+		record_start = create_button(window, std::wstring(L"Start recording (" + wsHkStartStop + L")").c_str(), 10, 10, 200, 50, 0);
 		push(record_start);
 
 		input_devices_text = create_text(window, L"&Input devices", 10, 70, 200, 20, 0);
@@ -1368,9 +1373,9 @@ public:
 
 		focus(output_devices_list);
 		set_list_position(output_devices_list, loopback_device);
-		record_manager = create_button(window, L"&Recordings manager", 10, 450, 200, 50, 0);
+		record_manager = create_button(window, L"Recordings manager", 10, 450, 200, 50, 0);
 		push(record_manager);
-		settings_button = create_button(window, L"&Settings", 10, 450 + 50 + 10, 200, 50, 0); // y = 510
+		settings_button = create_button(window, L"Settings", 10, 450 + 50 + 10, 200, 50, 0); // y = 510
 		push(settings_button);
 
 		focus(record_start);
@@ -1398,15 +1403,15 @@ public:
 		push(items_view_text);
 		items_view_list = create_list(window, 10, 10, 0, 10, 0);
 		push(items_view_list);
-		play_button = create_button(window, L"&Play", 10, 10, 10, 10, 0);
+		play_button = create_button(window, L"Play", 10, 10, 10, 10, 0);
 		push(play_button);
 		pause_button = create_button(window, L"&Pause", 10, 10, 10, 10, 0);
 		push(pause_button);
-		stop_button = create_button(window, L"&Stop", 10, 10, 10, 10, 0);
+		stop_button = create_button(window, L"Stop", 10, 10, 10, 10, 0);
 		push(stop_button);
-		delete_button = create_button(window, L"&Delete", 10, 10, 10, 10, 0);
+		delete_button = create_button(window, L"Delete", 10, 10, 10, 10, 0);
 		push(delete_button);
-		close_button = create_button(window, L"&Close", 10, 10, 10, 10, 0);
+		close_button = create_button(window, L"Close", 10, 10, 10, 10, 0);
 		push(close_button);
 		std::vector<std::wstring> files = get_files(std::wstring(record_path.begin(), record_path.end()));
 		for (unsigned int i = 0; i < files.size(); i++) {
@@ -1427,14 +1432,22 @@ public:
 	HWND record_stop = nullptr;
 	HWND record_pause = nullptr;
 	HWND record_restart = nullptr;
+	HWND hide = nullptr;
 
 	void build()override {
-		record_stop = create_button(window, L"&Stop recording", 10, 10, 100, 30, 0);
+		std::wstring wsHkStartStop; CStringUtils::UnicodeConvert(hotkey_start_stop, wsHkStartStop);
+		std::wstring wsHkPauseResume; CStringUtils::UnicodeConvert(hotkey_pause_resume, wsHkPauseResume);
+		std::wstring wsHkRestart; CStringUtils::UnicodeConvert(hotkey_restart, wsHkRestart);
+		std::wstring wsHkHideShow; CStringUtils::UnicodeConvert(hotkey_hide_show, wsHkHideShow);
+
+		record_stop = create_button(window, std::wstring(L"Stop recording (" + wsHkStartStop + L")").c_str(), 10, 10, 100, 30, 0);
 		push(record_stop);
-		record_pause = create_button(window, L"&Pause recording", 120, 10, 100, 30, 0);
+		record_pause = create_button(window, std::wstring(L"Pause recording (" + wsHkPauseResume + L")").c_str(), 120, 10, 100, 30, 0);
 		push(record_pause);
-		record_restart = create_button(window, L"&Restart recording", 230, 10, 100, 30, 0);
+		record_restart = create_button(window, std::wstring(L"Restart recording (" + wsHkRestart + L")").c_str(), 230, 10, 100, 30, 0);
 		push(record_restart);
+		hide = create_button(window, std::wstring(L"Hide window (" + wsHkHideShow + L")").c_str(), 250, 10, 100, 30, 0);
+		push(hide);
 
 		focus(record_stop);
 
@@ -1464,6 +1477,7 @@ public:
 	HWND lblHotkeyStartStop, editHotkeyStartStop;
 	HWND lblHotkeyPauseResume, editHotkeyPauseResume;
 	HWND lblHotkeyRestart, editHotkeyRestart;
+	HWND lblHotkeyHideShow, editHotkeyHideShow;
 
 	HWND lblCurrentPreset, listCurrentPreset;
 
@@ -1471,7 +1485,7 @@ public:
 	HWND btnCancelSettings;
 
 	// Temp storage for hotkey parsing
-	std::string new_hotkey_start_stop, new_hotkey_pause_resume, new_hotkey_restart;
+	std::string new_hotkey_start_stop, new_hotkey_pause_resume, new_hotkey_restart, new_hotkey_hide_show;
 
 
 	void build() override {
@@ -1558,7 +1572,14 @@ public:
 		std::wstring wsHkRestart; CStringUtils::UnicodeConvert(hotkey_restart, wsHkRestart);
 		editHotkeyRestart = create_input_box(window, false, false, x_control, y_pos, control_width, ctrl_height, 0); push(editHotkeyRestart);
 		set_text(editHotkeyRestart, wsHkRestart.c_str());
+		y_pos += ctrl_height + y_spacing;
+
+		push(create_text(window, L"Hide/Show Hotkey:", x_label, y_pos, label_width, ctrl_height, 0));
+		std::wstring wsHkHideShow; CStringUtils::UnicodeConvert(hotkey_hide_show, wsHkHideShow);
+		editHotkeyHideShow = create_input_box(window, false, false, x_control, y_pos, control_width, ctrl_height, 0); push(editHotkeyHideShow);
+		set_text(editHotkeyHideShow, wsHkHideShow.c_str());
 		y_pos += ctrl_height + section_spacing;
+
 
 		// --- Preset Settings ---
 		push(create_text(window, L"Current FFmpeg Preset:", x_label, y_pos, label_width, ctrl_height, 0));
@@ -1599,6 +1620,9 @@ public:
 
 		ws_val = get_text(editHotkeyRestart); CStringUtils::UnicodeConvert(ws_val, new_hotkey_restart);
 		if (!parse_hotkey(new_hotkey_restart, kmod_dummy, kcode_dummy)) { alert(L"Validation Error", L"Invalid Restart Hotkey format.", MB_ICONERROR); focus(editHotkeyRestart); return false; }
+		ws_val = get_text(editHotkeyHideShow); CStringUtils::UnicodeConvert(ws_val, new_hotkey_hide_show);
+		if (!parse_hotkey(new_hotkey_hide_show, kmod_dummy, kcode_dummy)) { alert(L"Validation Error", L"Invalid Hide/Show Hotkey format.", MB_ICONERROR); focus(editHotkeyHideShow); return false; }
+
 
 		ws_val = get_text(editRecordPath);
 		if (ws_val.empty()) { alert(L"Validation Error", L"Record path cannot be empty.", MB_ICONERROR); focus(editRecordPath); return false; }
@@ -1665,6 +1689,7 @@ public:
 		UnregisterHotKey(nullptr, HOTKEY_STARTSTOP);
 		UnregisterHotKey(nullptr, HOTKEY_PAUSERESUME);
 		UnregisterHotKey(nullptr, HOTKEY_RESTART);
+		UnregisterHotKey(nullptr, HOTKEY_HIDESHOW);
 
 		hotkey_start_stop = new_hotkey_start_stop;
 		conf.write("General", "hotkey-start-stop", hotkey_start_stop);
@@ -1672,11 +1697,14 @@ public:
 		conf.write("General", "hotkey-pause-resume", hotkey_pause_resume);
 		hotkey_restart = new_hotkey_restart;
 		conf.write("General", "hotkey-restart", hotkey_restart);
+		hotkey_hide_show = new_hotkey_hide_show;
+		conf.write("General", "hotkey-hide-show", hotkey_hide_show);
 
 		DWORD kmod; int kcode;
 		if (parse_hotkey(hotkey_start_stop, kmod, kcode)) RegisterHotKey(nullptr, HOTKEY_STARTSTOP, kmod, kcode);
 		if (parse_hotkey(hotkey_pause_resume, kmod, kcode)) RegisterHotKey(nullptr, HOTKEY_PAUSERESUME, kmod, kcode);
 		if (parse_hotkey(hotkey_restart, kmod, kcode)) RegisterHotKey(nullptr, HOTKEY_RESTART, kmod, kcode);
+		if (parse_hotkey(hotkey_hide_show, kmod, kcode)) RegisterHotKey(nullptr, HOTKEY_HIDESHOW, kmod, kcode);
 
 		int preset_idx = get_list_position(listCurrentPreset);
 		std::wstring ws_preset_name_new = get_list_item_text_by_index_internal(listCurrentPreset, preset_idx);
@@ -1790,6 +1818,11 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, wchar_t* lpCmd
 				throw std::exception("Invalid hotkey");
 			}
 			RegisterHotKey(nullptr, HOTKEY_RESTART, kmod, kcode);
+			if (parse_hotkey(hotkey_hide_show, kmod, kcode) == false) {
+				throw std::exception("Invalid hotkey");
+			}
+			RegisterHotKey(nullptr, HOTKEY_HIDESHOW, kmod, kcode);
+
 			std::vector<std::string> presets_str = conf.get_keys("Presets");
 			if (presets_str.size() > 0) {
 				presets.clear();
@@ -1847,6 +1880,8 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, wchar_t* lpCmd
 		conf.write("General", "hotkey-start-stop", hotkey_start_stop);
 		conf.write("General", "hotkey-pause-resume", hotkey_pause_resume);
 		conf.write("General", "hotkey-restart", hotkey_restart);
+		conf.write("General", "hotkey-hide-show", hotkey_hide_show);
+
 		conf.write("Presets", g_DefaultPreset.name, g_DefaultPreset.command);
 		conf.write("General", "current-preset", g_DefaultPreset.name);
 		conf.save();
@@ -1865,6 +1900,12 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, wchar_t* lpCmd
 			throw std::exception("Invalid hotkey");
 		}
 		RegisterHotKey(nullptr, HOTKEY_RESTART, kmod, kcode);
+		hotkey_hide_show = conf.read("General", "hotkey-hide-show");
+		if (parse_hotkey(hotkey_hide_show, kmod, kcode) == false) {
+			throw std::exception("Invalid hotkey");
+		}
+		RegisterHotKey(nullptr, HOTKEY_HIDESHOW, kmod, kcode);
+
 		g_CurrentPreset = g_DefaultPreset;
 	}
 	if (!g_Running)return g_Retcode; // When an error was triggered
@@ -1881,6 +1922,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, wchar_t* lpCmd
 			if (!g_Recording || g_SettingsMode) {
 				hotkey_pressed(HOTKEY_PAUSERESUME);
 				hotkey_pressed(HOTKEY_RESTART);
+				hotkey_pressed(HOTKEY_HIDESHOW);
 			}
 			if (g_RecordingsManager || g_SettingsMode) {
 				hotkey_pressed(HOTKEY_STARTSTOP);
@@ -2116,6 +2158,14 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, wchar_t* lpCmd
 				if (sound_events)		g_SoundStream.PlayEvent(CSoundStream::SOUND_EVENT_RESTART_RECORDING);
 
 			}
+			if (g_Recording && (is_pressed(g_RecordingWindow.hide) || hotkey_pressed(HOTKEY_HIDESHOW))) {
+				if (IsWindowVisible(window)) {
+					hide_window(window);
+				}
+				else {
+					show_window(L"");
+				}
+			}
 		}
 	}
 	catch (const std::exception& ex) {
@@ -2131,6 +2181,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, wchar_t* lpCmd
 	UnregisterHotKey(nullptr, HOTKEY_STARTSTOP);
 	UnregisterHotKey(nullptr, HOTKEY_PAUSERESUME);
 	UnregisterHotKey(nullptr, HOTKEY_RESTART);
+	UnregisterHotKey(nullptr, HOTKEY_HIDESHOW);
 	hide_window(window);
 	timeEndPeriod(1);
 	(void)hInstance;
