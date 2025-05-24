@@ -64,6 +64,7 @@ inline std::optional<R> safeCallVal(T* obj, Func func, Args ...args) {
 }
 
 
+
 using namespace gui;
 enum EHotKey {
 	HOTKEY_STARTSTOP = 1,
@@ -167,31 +168,32 @@ public:
 
 
 
-static bool ParseCommandLineOptions(const wchar_t* lpCmdLine, std::vector<std::string>& options, std::vector<std::string>& values) {
-	std::string str;
-	CStringUtils::UnicodeConvert(lpCmdLine, str);
-	std::vector<std::string> parsed = CStringUtils::Split(" ", str);
-	if (parsed.empty()) return false;
-	for (std::string& arg : parsed) {
-		if (arg[0] == '-' || arg[0] == '/') {
-			arg.erase(arg.begin() + 0);
-			options.push_back(arg);
-		}
-		else {
-			values.push_back(arg);
-		}
-	}
-	return true;
-}
 
-
-// This class has values and flags built by command line arguments
+// Command line arguments
 class COptionSet {
 public:
 	bool start = false;
 	std::string filename = "";
 	bool useFilename = false;
 	bool exitAfterStop = false;
+
+	static bool ParseOptions(const wchar_t* lpCmdLine, std::vector<std::string>& options, std::vector<std::string>& values) {
+		std::string str;
+		CStringUtils::UnicodeConvert(lpCmdLine, str);
+		std::vector<std::string> parsed = CStringUtils::Split(" ", str);
+		if (parsed.empty()) return false;
+		for (std::string& arg : parsed) {
+			if (arg[0] == '-' || arg[0] == '/') {
+				arg.erase(arg.begin() + 0);
+				options.push_back(arg);
+			}
+			else {
+				values.push_back(arg);
+			}
+		}
+		return true;
+	}
+
 };
 
 
@@ -288,8 +290,8 @@ public:
 
 		varName.vt = VT_BSTR;
 		varName.bstrVal = _bstr_t(L"");
-		hr = pAutomation->CreatePropertyConditionEx(UIA_NamePropertyId, varName, PropertyConditionFlags_None, &pCondition);
-		if (FAILED(hr)) {
+		auto result = safeCallVal<IUIAutomation, HRESULT>(pAutomation, &IUIAutomation::CreatePropertyConditionEx, UIA_NamePropertyId, varName, PropertyConditionFlags_None, &pCondition);
+		if (!result.has_value() || FAILED(*result)) {
 			return;
 		}
 	}
@@ -300,25 +302,16 @@ public:
 	}
 
 	bool Speak(const wchar_t* text, bool interrupt = true) {
-		NotificationProcessing flags = NotificationProcessing_ImportantAll;
-		if (interrupt)
-			flags = NotificationProcessing_ImportantMostRecent;
 		pProvider = new Provider(GetForegroundWindow());
 
-		HRESULT hr = 0;
 		auto result = safeCallVal<IUIAutomation, HRESULT>(pAutomation, &IUIAutomation::ElementFromHandle, GetForegroundWindow(), &pElement);
-		if (!result.has_value()) {
+		if (!result.has_value() || FAILED(*result)) {
 			return false;
 		}
-		hr = *result;
+		HRESULT hr = UiaRaiseNotificationEvent(pProvider, NotificationKind_ActionCompleted, interrupt ? NotificationProcessing_ImportantMostRecent : NotificationProcessing_ImportantAll, _bstr_t(text), _bstr_t(L""));
 		if (FAILED(hr)) {
 			return false;
 		}
-		hr = UiaRaiseNotificationEvent(pProvider, NotificationKind_ActionCompleted, flags, _bstr_t(text), _bstr_t(L""));
-		if (FAILED(hr)) {
-			return false;
-		}
-
 		return true;
 
 	}
@@ -334,15 +327,13 @@ public:
 		return this->Speak(utf16str.c_str(), interrupt);
 	}
 
-	bool Speakf(const char* format, ...) {
+	template <typename... Args>
+	bool Speakf(const char* format, Args... args) {
 		const size_t bufferSize = 1024;
 		char buffer[bufferSize];
 
-		va_list args;
-		va_start(args, format);
 
-		int ret = vsnprintf(buffer, bufferSize, format, args);
-		va_end(args);
+		int ret = vsnprintf(buffer, bufferSize, format, args...);
 
 		if (ret < 0 || ret >= bufferSize) {
 			return false;
@@ -559,7 +550,7 @@ static std::string ma_result_to_string(ma_result result) {
 
 static ma_result g_MaLastError = MA_SUCCESS;
 
-static void CheckIfError(ma_result result) {
+static void CheckIfError(const ma_result& result) {
 	g_MaLastError = MA_SUCCESS;
 	if (result == MA_SUCCESS) {
 		return;
@@ -576,7 +567,7 @@ static void CheckIfError(ma_result result) {
 
 
 
-class CAudioContext {
+class MINIAUDIO_IMPLEMENTATION CAudioContext {
 	std::unique_ptr<ma_context> context;
 public:
 	CAudioContext() : context(nullptr) {
@@ -599,9 +590,8 @@ static CAudioContext g_AudioContext;
 
 
 
-
-class CSoundStream {
-	std::shared_ptr<ma_engine> m_Engine;
+class MINIAUDIO_IMPLEMENTATION CSoundStream {
+	std::unique_ptr<ma_engine> m_Engine;
 	std::unique_ptr<ma_sound> m_Player;
 	std::unique_ptr<ma_waveform> m_Waveform;
 	std::wstring current_file;
@@ -618,23 +608,40 @@ public:
 	};
 	CSoundStream() : m_Engine(nullptr), m_Player(nullptr), m_Waveform(nullptr) {}
 	~CSoundStream() {
-		Close();
-		if (m_Engine) {
-			ma_engine_uninit(&*m_Engine);
-			m_Engine.reset();
-		}
+		Uninitialize();
 	}
 
 	bool Initialize() {
 		if (m_Engine) {
 			return true;
 		}
-		m_Engine = std::make_shared<ma_engine>();
+		m_Engine = std::make_unique<ma_engine>();
 		ma_engine_config cfg = ma_engine_config_init();
 		cfg.sampleRate = sample_rate;
 		cfg.channels = channels;
 		CheckIfError(ma_engine_init(&cfg, &*m_Engine));
 		return g_MaLastError == MA_SUCCESS;
+	}
+
+	bool Uninitialize() {
+		Close();
+		if (m_Engine) {
+			ma_engine_uninit(&*m_Engine);
+			m_Engine.reset();
+		}
+		return true;
+	}
+
+	inline bool Reinitialize() {
+		return Uninitialize() && Initialize();
+	}
+
+	operator ma_sound* () {
+		return &*m_Player;
+	}
+
+	operator ma_engine* () {
+		return &*m_Engine;
 	}
 
 	bool Play(const std::wstring& filename) {
@@ -744,57 +751,67 @@ public:
 
 static CSoundStream g_SoundStream;
 
-static inline ma_bool32 try_parse_format(const char* str, ma_format& value)
-{
 
-	/*  */ if (strcmp(str, "u8") == 0) {
+
+static bool ma_format_convert(const std::string& format, ma_format& value)
+{
+	std::string str = CStringUtils::ToLowerCase(format);
+	if (str == "u8") {
 		value = ma_format_u8;
 	}
-	else if (strcmp(str, "s16") == 0) {
+	else if (str == "s16") {
 		value = ma_format_s16;
 	}
-	else if (strcmp(str, "s24") == 0) {
+	else if (str == "s24") {
 		value = ma_format_s24;
 	}
-	else if (strcmp(str, "s32") == 0) {
+	else if (str == "s32") {
 		value = ma_format_s32;
 	}
-	else if (strcmp(str, "f32") == 0) {
+	else if (str == "f32") {
 		value = ma_format_f32;
 	}
 	else {
-		return MA_FALSE;    /* Not a format. */
+		return false;
 	}
 
-	return MA_TRUE;
+	return true;
 }
 
-static inline const char* ma_format_to_string(ma_format format) {
+static bool ma_format_convert(ma_format& format, std::string& value) {
 	switch (format) {
 	case ma_format_u8:
-		return "u8";
+		value = "u8";
+		break;
 	case ma_format_s16:
-		return "s16";
+		value = "s16";
+		break;
 	case ma_format_s24:
-		return "s24";
+		value = "s24";
+		break;
 	case ma_format_s32:
-		return "s32";
+		value = "s32";
+		break;
 	case ma_format_f32:
-		return "f32";
+		value = "f32";
+		break;
 	default:
-		return NULL;
+		return false;
 	}
-	return NULL;
+	return true;
 }
 
 
 
-static bool str_to_bool(const std::string& val) {
+static inline std::optional<bool> str_to_bool(const std::string& val) {
 	std::string str = CStringUtils::ToLowerCase(val);
 	if (str == "0" || str == "false") {
 		return false;
 	}
-	return str == "1" || str == "true" ? true : false;
+	else if (str == "1" || str == "true") {
+		return true;
+	}
+	return std::nullopt;
 }
 
 
@@ -1255,36 +1272,6 @@ public:
 	}
 	virtual void build() {}
 
-	void auto_size()
-	{
-		// Get the client rectangle of the window
-		RECT clientRect;
-		GetClientRect(window, &clientRect);
-
-		// Iterate through all child windows (controls)
-		HWND childWnd = GetWindow(window, GW_CHILD);
-		while (childWnd != NULL)
-		{
-			// Get the control's rectangle
-			RECT controlRect;
-			GetWindowRect(childWnd, &controlRect);
-
-			// Calculate the new position within the client area
-			int newX = controlRect.left - clientRect.left;
-			int newY = controlRect.top - clientRect.top;
-
-			// Set the control's position within the window
-			SetWindowPos(childWnd, HWND_TOP,
-				newX, newY,
-				controlRect.right - controlRect.left,
-				controlRect.bottom - controlRect.top,
-				SWP_NOSIZE | SWP_NOZORDER);
-
-			// Move to the next child window
-			childWnd = GetWindow(childWnd, GW_HWNDNEXT);
-		}
-	}
-
 
 
 };
@@ -1547,7 +1534,10 @@ public:
 			std::wstring wfmt_str; CStringUtils::UnicodeConvert(std::string(fmt_str), wfmt_str);
 			add_list_item(listBufferFormat, wfmt_str.c_str());
 		}
-		std::wstring wsBufferFormat; CStringUtils::UnicodeConvert(ma_format_to_string(buffer_format), wsBufferFormat);
+		std::wstring wsBufferFormat;
+		std::string s_buffer_format;
+		ma_format_convert(buffer_format, s_buffer_format);
+		CStringUtils::UnicodeConvert(s_buffer_format, wsBufferFormat);
 		set_list_selection_by_text_internal(listBufferFormat, wsBufferFormat);
 		y_pos += list_height + 20 + section_spacing;
 
@@ -1630,14 +1620,14 @@ public:
 		std::wstring ws_val; std::string s_val;
 
 		ws_val = get_text(editSampleRate); CStringUtils::UnicodeConvert(ws_val, s_val);
-		sample_rate = std::stoul(s_val);
+		sample_rate = std::clamp(static_cast<ma_uint32>(std::stoul(s_val)), (ma_uint32)8000, (ma_uint32)384000);
 		conf.write("General", "sample-rate", std::to_string(sample_rate));
 
 		channels = (get_list_position(listChannels) == 0) ? 1 : 2;
 		conf.write("General", "channels", std::to_string(channels));
 
 		ws_val = get_text(editBufferSize); CStringUtils::UnicodeConvert(ws_val, s_val);
-		buffer_size = std::stoul(s_val);
+		buffer_size = std::clamp(static_cast<ma_uint32>(std::stoul(s_val)), (ma_uint32)0, (ma_uint32)3000);
 		conf.write("General", "buffer-size", std::to_string(buffer_size));
 
 		ws_val = get_text(editFilenameSignature); CStringUtils::UnicodeConvert(ws_val, filename_signature);
@@ -1669,8 +1659,8 @@ public:
 		int buffer_fmt_idx = get_list_position(listBufferFormat);
 		std::wstring ws_buffer_format_new = get_list_item_text_by_index_internal(listBufferFormat, buffer_fmt_idx);
 		std::string s_buffer_format_new; CStringUtils::UnicodeConvert(ws_buffer_format_new, s_buffer_format_new);
-		try_parse_format(s_buffer_format_new.c_str(), buffer_format);
-		conf.write("General", "sample-format", ma_format_to_string(buffer_format));
+		ma_format_convert(s_buffer_format_new.c_str(), buffer_format);
+		conf.write("General", "sample-format", s_buffer_format_new);
 
 		UnregisterHotKey(nullptr, HOTKEY_STARTSTOP);
 		UnregisterHotKey(nullptr, HOTKEY_PAUSERESUME);
@@ -1683,7 +1673,7 @@ public:
 		hotkey_restart = new_hotkey_restart;
 		conf.write("General", "hotkey-restart", hotkey_restart);
 
-		DWORD kmod; int kcode; // Re-declare to avoid scope issues if any
+		DWORD kmod; int kcode;
 		if (parse_hotkey(hotkey_start_stop, kmod, kcode)) RegisterHotKey(nullptr, HOTKEY_STARTSTOP, kmod, kcode);
 		if (parse_hotkey(hotkey_pause_resume, kmod, kcode)) RegisterHotKey(nullptr, HOTKEY_PAUSERESUME, kmod, kcode);
 		if (parse_hotkey(hotkey_restart, kmod, kcode)) RegisterHotKey(nullptr, HOTKEY_RESTART, kmod, kcode);
@@ -1698,7 +1688,7 @@ public:
 				break;
 			}
 		}
-
+		g_SoundStream.Reinitialize(); // After a sample rate change
 		conf.save();
 	}
 };
@@ -1716,17 +1706,10 @@ static CSettingsWindow g_SettingsWindow;
 
 bool g_RecordingsManager = false;
 
-std::wstring WINAPI get_exe() {
-	wchar_t* filename = new wchar_t[500];
-	GetModuleFileNameW(nullptr, filename, 500);
-	std::wstring result(filename);
-	delete[] filename;
-	return result;
-}
 
 int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, wchar_t* lpCmdLine, ma_int32       nShowCmd) {
 	std::vector<std::string> options, values;
-	if (ParseCommandLineOptions(lpCmdLine, options, values)) {
+	if (g_CommandLineOptions.ParseOptions(lpCmdLine, options, values)) {
 		for (size_t i = 0; i < options.size(); ++i) {
 			if (options[i] == "-start") {
 				g_CommandLineOptions.start = true;
@@ -1740,7 +1723,8 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, wchar_t* lpCmd
 			}
 		}
 	}
-
+	options.clear();
+	values.clear();
 	g_Running = true; // Starting application
 	SetUnhandledExceptionFilter(ExceptionHandler);
 	timeBeginPeriod(1);
@@ -1750,11 +1734,11 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, wchar_t* lpCmd
 	if (result == 0) {
 		try {
 			std::string srate = conf.read("General", "sample-rate");
-			sample_rate = std::stoi(srate);
+			sample_rate = std::clamp(static_cast<ma_uint32>(std::stoi(srate)), (ma_uint32)8000, (ma_uint32)384000);
 			std::string chann = conf.read("General", "channels");
-			channels = std::stoi(chann);
+			channels = std::clamp(static_cast<ma_uint32>(std::stoi(chann)), (ma_uint32)1, (ma_uint32)2);
 			std::string bs = conf.read("General", "buffer-size");
-			buffer_size = std::stoi(bs);
+			buffer_size = std::clamp(static_cast<ma_uint32>(std::stoi(bs)), (ma_uint32)0, (ma_uint32)3000);
 			filename_signature = conf.read("General", "filename-signature");
 			record_path = conf.read("General", "record-path");
 			audio_format = CStringUtils::ToLowerCase(conf.read("General", "audio-format"));
@@ -1772,15 +1756,23 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, wchar_t* lpCmd
 			std::string oud = conf.read("General", "loopback-device");
 			loopback_device = std::stoi(oud);
 			std::string sevents = conf.read("General", "sound-events");
-			sound_events = str_to_bool(sevents);
+			auto result = str_to_bool(sevents);
+			if (!result.has_value()) {
+				throw std::exception("Failed to parse bool. Either 'true' or 'false' can be used in uppercase or lowercase. Integers are also allowed (0 is false, 1 is true)");
+			}
+			sound_events = *result;
 			std::string mstems = conf.read("General", "make-stems");
-			make_stems = str_to_bool(mstems);
+			result = str_to_bool(mstems);
+			if (!result.has_value()) {
+				throw std::exception("Failed to parse bool. Either 'true' or 'false' can be used in uppercase or lowercase. Integers are also allowed (0 is false, 1 is true)");
+			}
+
 			if (make_stems && audio_format != "wav") {
 				throw std::exception("Can't make stems when using another format, built-in not supported by FPRecorder");
 			}
 			std::string sformat = CStringUtils::ToLowerCase(conf.read("General", "sample-format"));
-			ma_bool32 parse_result = try_parse_format(sformat.c_str(), buffer_format);
-			if (parse_result == MA_FALSE) {
+			bool parse_result = ma_format_convert(sformat.c_str(), buffer_format);
+			if (parse_result == false) {
 				throw std::exception("Invalid sample format parameter");
 			}
 			hotkey_start_stop = conf.read("General", "hotkey-start-stop");
@@ -1849,8 +1841,9 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, wchar_t* lpCmd
 		conf.write("General", "loopback-device", std::to_string(loopback_device));
 		conf.write("General", "sound-events", std::to_string(sound_events));
 		conf.write("General", "make-stems", std::to_string(make_stems));
-
-		conf.write("General", "sample-format", string(ma_format_to_string(buffer_format)));
+		std::string s_format;
+		ma_format_convert(buffer_format, s_format);
+		conf.write("General", "sample-format", s_format);
 		conf.write("General", "hotkey-start-stop", hotkey_start_stop);
 		conf.write("General", "hotkey-pause-resume", hotkey_pause_resume);
 		conf.write("General", "hotkey-restart", hotkey_restart);
@@ -1876,11 +1869,11 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, wchar_t* lpCmd
 	}
 	if (!g_Running)return g_Retcode; // When an error was triggered
 	try {
-		window = show_window(L"FPRecorder " + version + (IsUserAnAdmin() ? L" (Administrator)" : L"")); assert(window > 0);
+		window = show_window(L"FPRecorder " + version + (IsUserAnAdmin() ? L" (Administrator)" : L""));
 		g_MainWindow.build();
 		presets.push_back(g_DefaultPreset);
 		key_pressed(VK_SPACE) || key_pressed(VK_RETURN); // Avoid click to start recording
-		while (g_Running) {
+		while (g_Running && window ? true : false) {
 			wait(5);
 			update_window(window);
 
