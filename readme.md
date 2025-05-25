@@ -11,7 +11,7 @@ FPRecorder is a Windows application designed for capturing audio from your micro
 *   **GUI Interface:** Easy-to-use windows for starting/stopping recordings, managing devices, accessing settings, and managing recorded files.
 *   **Recordings Manager:** Built-in tool to browse, play, and delete your recordings.
 *   **Settings Window:** Configure various aspects of recording, output, and hotkeys through a dedicated GUI.
-*   **Hotkey Support:** Control recording (start/stop, pause/resume, restart) without needing the application window in focus.
+*   **Hotkey Support:** Control recording (start/stop, pause/resume, restart, hiding/showing window) without needing the application window in focus.
 *   **Configurable Output:**
     *   Set sample rate, channels, and buffer size.
     *   Customize filename patterns using date/time.
@@ -72,6 +72,7 @@ Once recording starts, this window appears:
 *   **Stop recording Button:** Stops the current recording and saves the file.
 *   **Pause recording / Resume recording Button:** Toggles between pausing and resuming the recording.
 *   **Restart recording Button:** Stops the current recording, *deletes it*, and immediately starts a new one with the same settings. You'll be asked for confirmation.
+*   **Hide window Button:** Hides the recording window. To show it, please press hide/show hotkey.
 
 ### Hotkeys for Recording
 
@@ -80,6 +81,7 @@ You can control recording even when FPRecorder is not the active window using gl
 *   **Start/Stop Recording:** `Windows + Shift + F1` (Default)
 *   **Pause/Resume Recording:** `Windows + Shift + F2` (Default)
 *   **Restart Recording:** `Windows + Shift + F3` (Default)
+*   **Hide/Show Window:** `Windows + Shift + F4` (Default)
 
 *(These can be changed in the Settings window or `fp.ini`)*
 
@@ -152,6 +154,8 @@ Click the **Settings** button on the main window to open the Settings window. He
         *   Default: `Windows+Shift+F2`
     *   **Restart Hotkey:** Defines the global hotkey to restart a recording (stops current, deletes it, and starts new).
         *   Default: `Windows+Shift+F3`
+    *   **Hide/Show Hotkey:** Defines the global hotkey to hide or show FPRecorder window.
+        *   Default: `Windows+Shift+F4`
 *   **Current FFmpeg Preset:**
     *   Selects the FFmpeg preset to use for conversion if "Audio Format" is not `wav`.
     *   Presets define the FFmpeg command-line arguments for conversion. They are configured in the `[Presets]` section of `fp.ini`.
@@ -200,6 +204,8 @@ The file is organized into sections (e.g., `[General]`, `[Presets]`).
     *   Default: `Windows+Shift+F2`
 *   `hotkey-restart`: Hotkey for restarting recording.
     *   Default: `Windows+Shift+F3`
+*   `hotkey-hide-show`: Hotkey for hide or show FPRecorder window.
+    *   Default: `Windows+Shift+F4`
 *   `current-preset`: Name of the FFmpeg preset to use if `audio-format` is not `wav`. Must match a preset name in the `[Presets]` section.
     *   Default: `Default`
 
