@@ -583,6 +583,7 @@ public:
 		ma_context_uninit(&*context);
 		context.reset();
 	}
+
 	inline operator ma_context* () {
 		return &*context;
 	}
@@ -668,7 +669,7 @@ public:
 		return false;
 	}
 
-	bool Play(const std::string& filename) {
+	inline bool Play(const std::string& filename) {
 		std::wstring filename_u;
 		CStringUtils::UnicodeConvert(filename, filename_u);
 		return Play(filename_u);
@@ -782,7 +783,7 @@ static bool ma_format_convert(const std::string& format, ma_format& value)
 	return true;
 }
 
-static bool ma_format_convert(ma_format& format, std::string& value) {
+static bool ma_format_convert(const ma_format& format, std::string& value) {
 	switch (format) {
 	case ma_format_u8:
 		value = "u8";
@@ -1319,7 +1320,7 @@ static void set_list_selection_by_text_internal(HWND list_hwnd, const std::wstri
 }
 
 
-class CMainWindow : public IWindow {
+class CMainWindow final : public virtual IWindow {
 public:
 	HWND record_start = nullptr;
 	HWND input_devices_text = nullptr;
@@ -1386,7 +1387,7 @@ public:
 
 
 
-class CRecordManagerWindow : public IWindow {
+class CRecordManagerWindow final : public virtual IWindow {
 public:
 	HWND items_view_text = nullptr;
 	HWND items_view_list = nullptr;
@@ -1427,7 +1428,7 @@ public:
 };
 
 
-class CRecordingWindow : public IWindow {
+class CRecordingWindow final : public virtual IWindow {
 public:
 	HWND record_stop = nullptr;
 	HWND record_pause = nullptr;
@@ -1462,7 +1463,7 @@ public:
 };
 
 
-class CSettingsWindow : public IWindow {
+class CSettingsWindow final : public virtual IWindow {
 public:
 	HWND lblSampleRate, editSampleRate;
 	HWND lblChannels, listChannels;
