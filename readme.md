@@ -125,7 +125,7 @@ Click the **Settings** button on the main window to open the Settings window. He
 *   **Record Path:**
     *   The folder where recordings will be saved.
     *   Can be a relative path (e.g., `recordings`) or an absolute path (e.g., `C:\MyRecordings`).
-    *   Click the "..." button to browse for a folder.
+    *   Click the "Browse..." button to browse for a folder.
     *   Default: `recordings`
 *   **Audio Format:**
     *   Select the desired *final* audio format for your recordings.

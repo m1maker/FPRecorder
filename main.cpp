@@ -1524,7 +1524,7 @@ public:
 		std::wstring wsRecordPath; CStringUtils::UnicodeConvert(record_path, wsRecordPath);
 		editRecordPath = create_input_box(window, false, false, x_control, y_pos, control_width, ctrl_height, 0); push(editRecordPath);
 		set_text(editRecordPath, wsRecordPath.c_str());
-		btnBrowseRecordPath = create_button(window, L"...", x_button_browse, y_pos, 30, ctrl_height, 0); push(btnBrowseRecordPath);
+		btnBrowseRecordPath = create_button(window, L"Browse...", x_button_browse, y_pos, 30, ctrl_height, 0); push(btnBrowseRecordPath);
 		y_pos += ctrl_height + y_spacing;
 
 		push(create_text(window, L"Audio Format:", x_label, y_pos, label_width, ctrl_height, 0));
