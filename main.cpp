@@ -16,6 +16,7 @@
 #include <ole2.h>
 #include <shellapi.h>
 #include <shlobj_core.h>
+#include <stacktrace>
 #include <tlhelp32.h>
 #include <UIAutomation.h>
 #include <Uiautomationcore.h>
@@ -601,7 +602,7 @@ class MINIAUDIO_IMPLEMENTATION CSoundStream {
 	std::unique_ptr<ma_waveform> m_Waveform;
 	std::wstring current_file;
 public:
-	enum ESoundEvent : std::uint8_t {
+	enum ESoundEvent : std::int8_t {
 		SOUND_EVENT_NONE = 0,
 		SOUND_EVENT_START_RECORDING,
 		SOUND_EVENT_STOP_RECORDING,
@@ -2171,7 +2172,10 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, wchar_t* lpCmd
 	}
 	catch (const std::exception& ex) {
 		std::wstring exception_u;
-		CStringUtils::UnicodeConvert(ex.what(), exception_u);
+		std::stringstream ss;
+		ss << ex.what();
+		ss << std::stacktrace::current();
+		CStringUtils::UnicodeConvert(ss.str(), exception_u);
 		if (sound_events)		g_SoundStream.PlayEvent(CSoundStream::SOUND_EVENT_ERROR);
 		alert(L"FPRuntimeError", exception_u.c_str(), MB_ICONERROR);
 		g_Running = false;
@@ -2193,31 +2197,8 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, wchar_t* lpCmd
 
 LONG WINAPI ExceptionHandler(EXCEPTION_POINTERS* exceptionInfo) {
 	std::stringstream ss;
-	ss << "Caught an access violation (segmentation fault)." << std::endl;
-
-	// Get the address where the exception occurred
-	ULONG_PTR faultingAddress = exceptionInfo->ExceptionRecord->ExceptionInformation[1];
-	ss << "Faulting address: " << faultingAddress << std::endl;
-
-	// Capture the stack trace
-	void* stack[100];
-	unsigned short frames;
-	SYMBOL_INFO* symbol;
-	HANDLE process = GetCurrentProcess();
-
-	SymInitialize(process, NULL, TRUE);
-	frames = CaptureStackBackTrace(0, 100, stack, NULL);
-
-	symbol = (SYMBOL_INFO*)calloc(sizeof(SYMBOL_INFO) + 256 * sizeof(char), 1);
-	symbol->MaxNameLen = 255;
-	symbol->SizeOfStruct = sizeof(SYMBOL_INFO);
-
-	for (unsigned short i = 0; i < frames; i++) {
-		SymFromAddr(process, (DWORD64)(stack[i]), 0, symbol);
-		ss << i << ": " << symbol->Name << " - 0x" << symbol->Address << std::endl;
-	}
-
-	free(symbol);
+	std::stacktrace st = std::stacktrace::current();
+	ss << st;
 	std::wstring str_u;
 	CStringUtils::UnicodeConvert(ss.str(), str_u);
 	if (sound_events)		g_SoundStream.PlayEvent(CSoundStream::SOUND_EVENT_ERROR);
