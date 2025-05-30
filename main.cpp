@@ -221,7 +221,7 @@ static int loopback_device = 0;
 static ma_bool32 sound_events = MA_TRUE;
 static ma_bool32 make_stems = MA_FALSE;
 static ma_format buffer_format = ma_format_s16;
-static const ma_uint32 periods = 256;
+static constexpr ma_uint32 periods = 256;
 static std::string hotkey_start_stop = "Windows+Shift+F1";
 static std::string hotkey_pause_resume = "Windows+Shift+F2";
 static std::string hotkey_restart = "Windows+Shift+F3";
@@ -318,15 +318,15 @@ public:
 		return true;
 
 	}
-	bool Speak(const char* text, bool interrupt = true) {
+	inline bool Speak(const char* text, bool interrupt = true) {
 		std::wstring str;
 		CStringUtils::UnicodeConvert(text, str);
 		return this->Speak(str.c_str(), interrupt);
 	}
-	bool Speak(const std::string& utf8str, bool interrupt = true) {
+	inline bool Speak(const std::string& utf8str, bool interrupt = true) {
 		return this->Speak(utf8str.c_str(), interrupt);
 	}
-	bool Speak(const std::wstring& utf16str, bool interrupt = true) {
+	inline bool Speak(const std::wstring& utf16str, bool interrupt = true) {
 		return this->Speak(utf16str.c_str(), interrupt);
 	}
 
@@ -856,6 +856,8 @@ static std::vector<application> WINAPI get_tasklist() {
 	}
 	return tasklist;
 }
+
+
 struct audio_device {
 	std::wstring name;
 	ma_device_id id;
@@ -1953,6 +1955,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, wchar_t* lpCmd
 				g_SettingsWindow.build();
 				g_SettingsMode = true;
 				g_SpeechProvider.Speak("Settings", false);
+				key_released(VK_RETURN);
 			}
 
 			if (g_SettingsMode) {
@@ -1963,7 +1966,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, wchar_t* lpCmd
 					g_SettingsMode = false;
 					g_SpeechProvider.Speak("Canceled.", false);
 				}
-				else if (is_pressed(g_SettingsWindow.btnSaveSettings)) {
+				else if (is_pressed(g_SettingsWindow.btnSaveSettings) || key_pressed(VK_RETURN)) {
 					if (g_SettingsWindow.validate_and_prepare_settings()) {
 						g_SettingsWindow.apply();
 
@@ -2168,7 +2171,8 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, wchar_t* lpCmd
 					hide_window(window);
 				}
 				else {
-					show_window(L"");
+					show_window(L""); // Actually, it shouldn't be like that, I mean the window name will remain the same when hiding and showing and I didn't fix this bug in the GUI. But for now we'll use the bug.
+					SetForegroundWindow(window);
 				}
 			}
 		}
