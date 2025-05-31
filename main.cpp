@@ -203,6 +203,7 @@ static COptionSet g_CommandLineOptions;
 
 LONG WINAPI ExceptionHandler(EXCEPTION_POINTERS* exceptionInfo);
 
+
 struct preset {
 	std::string name;
 	std::string command;

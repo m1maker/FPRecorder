@@ -72,7 +72,7 @@ Once recording starts, this window appears:
 *   **Stop recording Button:** Stops the current recording and saves the file.
 *   **Pause recording / Resume recording Button:** Toggles between pausing and resuming the recording.
 *   **Restart recording Button:** Stops the current recording, *deletes it*, and immediately starts a new one with the same settings. You'll be asked for confirmation.
-*   **Hide window Button:** Hides the recording window. To show it, please press hide/show hotkey.
+*   **Hide window Button:** Hides the recording window. To show it, press hide/show hotkey.
 
 ### Hotkeys for Recording
 
@@ -293,5 +293,6 @@ FPRecorder records audio to a temporary WAV file first. If `audio-format` (confi
     *   Run FPRecorder as Administrator if other applications with higher privileges are intercepting hotkeys (though generally not recommended unless necessary).
 *   **Settings window changes not taking effect:**
     *   Ensure you clicked "Save and Apply" in the Settings window. Changes are not applied if you only click "Cancel" or close the window.
-
+*   **I hear crackling, glitches or dropouts in my recording:**
+    *   System drivers typically attempt to select the optimal buffer size for your sound card based on hardware parameters. However, on less powerful computers, a suboptimal buffer size may be selected, leading to audio glitches. To resolve this, try increasing the buffer size in increments (e.g., 128, 256, 512, 1024) until you achieve clear sound.
 ---
