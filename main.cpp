@@ -208,7 +208,21 @@ struct preset {
 	std::string command;
 };
 static preset g_CurrentPreset;
-static std::vector<preset> presets;
+
+static std::vector<preset> g_Presets = {
+	{ "Default", "ffmpeg.exe -i %I %i.%f" },
+	{ "MP3 128k", "ffmpeg.exe -i %I -b:a 128k %i.mp3" },
+	{ "MP3 192k", "ffmpeg.exe -i %I -b:a 192k %i.mp3" },
+	{ "MP3 256k", "ffmpeg.exe -i %I -b:a 256k %i.mp3" },
+	{ "MP3 320k", "ffmpeg.exe -i %I -b:a 320k %i.mp3" },
+	{ "AAC 128k", "ffmpeg.exe -i %I -c:a aac -b:a 128k %i.m4a" },
+	{ "AAC 192k", "ffmpeg.exe -i %I -c:a aac -b:a 192k %i.m4a" },
+	{ "AAC 256k", "ffmpeg.exe -i %I -c:a aac -b:a 256k %i.m4a" },
+	{ "AAC 320k", "ffmpeg.exe -i %I -c:a aac -b:a 320k %i.m4a" },
+	{ "OGG Vorbis q5", "ffmpeg.exe -i %I -c:a libvorbis -qscale:a 5 %i.ogg" },
+	{ "OGG Vorbis q7", "ffmpeg.exe -i %I -c:a libvorbis -qscale:a 7 %i.ogg" },
+	{ "FLAC (Lossless)", "ffmpeg.exe -i %I -c:a flac %i.flac" }
+};
 
 static ma_uint32 sample_rate = 44100;
 static ma_uint32 channels = 2;
@@ -227,8 +241,7 @@ static std::string hotkey_pause_resume = "Windows+Shift+F2";
 static std::string hotkey_restart = "Windows+Shift+F3";
 static std::string hotkey_hide_show = "Windows+Shift+F4";
 
-static const preset g_DefaultPreset = { "Default", "ffmpeg.exe -i %I %i.%f" };
-static std::string current_preset_name = "Default";
+static std::string current_preset_name = g_Presets[0].name;
 static user_config conf("fp.ini");
 
 static inline std::string _cdecl get_now(bool filename = true) {
@@ -302,9 +315,12 @@ public:
 		safeCall(pProvider, &Provider::Release);
 		safeCall(pCondition, &IUIAutomationCondition::Release);
 		safeCall(pAutomation, &IUIAutomation::Release);
+		safeCall(pElement, &IUIAutomationElement::Release);
 	}
 
 	bool Speak(const wchar_t* text, bool interrupt = true) {
+		safeCall(pProvider, &Provider::Release);
+		safeCall(pElement, &IUIAutomationElement::Release);
 		pProvider = new Provider(GetForegroundWindow());
 
 		auto result = safeCallVal<IUIAutomation, HRESULT>(pAutomation, &IUIAutomation::ElementFromHandle, GetForegroundWindow(), &pElement);
@@ -1551,7 +1567,7 @@ public:
 
 		push(create_text(window, L"Sample Format:", x_label, y_pos, label_width, ctrl_height, 0));
 		listBufferFormat = create_list(window, x_control, y_pos, control_width, list_height + 20, 0); push(listBufferFormat);
-		const char* formats[] = { "u8", "s16", "s24", "s32", "f32" };
+		constexpr const char* formats[] = { "u8", "s16", "s24", "s32", "f32" };
 		for (const char* fmt_str : formats) {
 			std::wstring wfmt_str; CStringUtils::UnicodeConvert(std::string(fmt_str), wfmt_str);
 			add_list_item(listBufferFormat, wfmt_str.c_str());
@@ -1592,7 +1608,7 @@ public:
 		// --- Preset Settings ---
 		push(create_text(window, L"Current FFmpeg Preset:", x_label, y_pos, label_width, ctrl_height, 0));
 		listCurrentPreset = create_list(window, x_control, y_pos, control_width, list_height, 0); push(listCurrentPreset);
-		for (const auto& p : presets) {
+		for (const auto& p : g_Presets) {
 			std::wstring wp_name; CStringUtils::UnicodeConvert(p.name, wp_name);
 			add_list_item(listCurrentPreset, wp_name.c_str());
 		}
@@ -1718,11 +1734,19 @@ public:
 		std::wstring ws_preset_name_new = get_list_item_text_by_index_internal(listCurrentPreset, preset_idx);
 		CStringUtils::UnicodeConvert(ws_preset_name_new, current_preset_name);
 		conf.write("General", "current-preset", current_preset_name);
-		for (const auto& p : presets) {
+		for (const auto& p : g_Presets) {
 			if (p.name == current_preset_name) {
 				g_CurrentPreset = p;
 				break;
 			}
+		}
+		// If the user has not changed the audio format, but has changed the preset.
+		std::string command = g_CurrentPreset.command;
+		size_t pos = command.find_last_of('.');
+		command.erase(0, pos + 1);
+		if (command != "%f" && audio_format != command) {
+			audio_format = command;
+			conf.write("General", "audio-format", audio_format);
 		}
 		g_SoundStream.Reinitialize(); // After a sample rate change
 		conf.save();
@@ -1833,19 +1857,19 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, wchar_t* lpCmd
 
 			std::vector<std::string> presets_str = conf.get_keys("Presets");
 			if (presets_str.size() > 0) {
-				presets.clear();
+				g_Presets.clear();
 				for (unsigned int i = 0; i < presets_str.size(); ++i) {
 					preset p;
 					p.name = presets_str[i];
 					p.command = conf.read("Presets", presets_str[i]);
-					presets.push_back(p);
+					g_Presets.push_back(p);
 				}
 			}
 			current_preset_name = conf.read("General", "current-preset");
 			bool preset_found = false;
 			unsigned int it;
-			for (it = 0; it < presets.size(); ++it) {
-				if (current_preset_name == presets[it].name) {
+			for (it = 0; it < g_Presets.size(); ++it) {
+				if (current_preset_name == g_Presets[it].name) {
 					preset_found = true;
 					break;
 				}
@@ -1853,8 +1877,17 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, wchar_t* lpCmd
 			if (!preset_found) {
 				throw std::exception("Invalid preset name");
 			}
-			g_CurrentPreset.name = presets[it].name;
-			g_CurrentPreset.command = presets[it].command;
+			g_CurrentPreset.name = g_Presets[it].name;
+			g_CurrentPreset.command = g_Presets[it].command;
+			// If the user has not changed the audio format, but has changed the preset.
+			std::string command = g_CurrentPreset.command;
+			size_t pos = command.find_last_of('.');
+			command.erase(0, pos + 1);
+			if (command != "%f" && audio_format != command) {
+				audio_format = command;
+				conf.write("General", "audio-format", audio_format);
+			}
+
 		}
 		catch (const std::exception& e) {
 			std::string what = e.what();
@@ -1889,9 +1922,10 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, wchar_t* lpCmd
 		conf.write("General", "hotkey-pause-resume", hotkey_pause_resume);
 		conf.write("General", "hotkey-restart", hotkey_restart);
 		conf.write("General", "hotkey-hide-show", hotkey_hide_show);
-
-		conf.write("Presets", g_DefaultPreset.name, g_DefaultPreset.command);
-		conf.write("General", "current-preset", g_DefaultPreset.name);
+		for (const preset& p : g_Presets) {
+			conf.write("Presets", p.name, p.command);
+		}
+		conf.write("General", "current-preset", current_preset_name);
 		conf.save();
 		hotkey_start_stop = conf.read("General", "hotkey-start-stop");
 		if (parse_hotkey(hotkey_start_stop, kmod, kcode) == false) {
@@ -1914,12 +1948,11 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, wchar_t* lpCmd
 		}
 		RegisterHotKey(nullptr, HOTKEY_HIDESHOW, kmod, kcode);
 
-		g_CurrentPreset = g_DefaultPreset;
+		g_CurrentPreset = g_Presets[0];
 	}
 	try {
 		window = show_window(L"FPRecorder " + version + (IsUserAnAdmin() ? L" (Administrator)" : L""));
 		g_MainWindow.build();
-		presets.push_back(g_DefaultPreset);
 		key_pressed(VK_SPACE) || key_pressed(VK_RETURN); // Avoid click to start recording
 		while (g_Running && window ? true : false) {
 			wait(5);
@@ -2134,17 +2167,18 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, wchar_t* lpCmd
 
 			}
 			if (g_Recording && (is_pressed(g_RecordingWindow.record_pause) || hotkey_pressed(HOTKEY_PAUSERESUME))) {
+				std::wstring wsHkPauseResume; CStringUtils::UnicodeConvert(hotkey_pause_resume, wsHkPauseResume);
 				if (!g_RecordingPaused) {
 					rec.pause();
 					if (sound_events)		g_SoundStream.PlayEvent(CSoundStream::SOUND_EVENT_PAUSE_RECORDING);
 					g_RecordingPaused = true;
-					set_text(g_RecordingWindow.record_pause, L"&Resume recording");
+					set_text(g_RecordingWindow.record_pause, std::wstring(L"Resume recording (" + wsHkPauseResume + L")").c_str());
 				}
 				else if (g_RecordingPaused) {
 					if (sound_events)		g_SoundStream.PlayEvent(CSoundStream::SOUND_EVENT_RESUME_RECORDING);
 					rec.resume();
 					g_RecordingPaused = false;
-					set_text(g_RecordingWindow.record_pause, L"&Pause recording");
+					set_text(g_RecordingWindow.record_pause, std::wstring(L"Pause recording (" + wsHkPauseResume + L")").c_str());
 				}
 				wait(20);
 			}
@@ -2161,7 +2195,8 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, wchar_t* lpCmd
 				rec.start();
 				g_Recording = true;
 				g_RecordingPaused = false;
-				set_text(g_RecordingWindow.record_pause, L"&Pause recording");
+				window_reset();
+				g_RecordingWindow.build();
 				DeleteFile(recording_name_u.c_str());
 				if (sound_events)		g_SoundStream.PlayEvent(CSoundStream::SOUND_EVENT_RESTART_RECORDING);
 
