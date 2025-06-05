@@ -1,4 +1,5 @@
 #define _CRT_SECURE_NO_WARNINGS
+#define NOMINMAX
 #include "gui/gui.h"
 #include "Provider.h"
 #include "user_config.h"
@@ -249,8 +250,6 @@ static ma_uint32 buffer_size = 0;
 static std::string filename_signature = "%Y %m %d %H %M %S";
 static std::filesystem::path record_path = std::filesystem::current_path() / "recordings";
 static std::string audio_format = "wav";
-static int input_device = 0;
-static int loopback_device = 0;
 static ma_bool32 sound_events = MA_TRUE;
 static ma_bool32 make_stems = MA_FALSE;
 static ma_format buffer_format = ma_format_s16;
@@ -259,6 +258,21 @@ static std::string hotkey_start_stop = "Windows+Shift+F1";
 static std::string hotkey_pause_resume = "Windows+Shift+F2";
 static std::string hotkey_restart = "Windows+Shift+F3";
 static std::string hotkey_hide_show = "Windows+Shift+F4";
+
+struct audio_device {
+	std::wstring name;
+	ma_device_id id;
+};
+
+
+
+struct ConfiguredSource {
+	std::wstring custom_name;
+	audio_device device;
+	ma_device_type type;
+};
+
+static std::vector<ConfiguredSource> g_ConfiguredSources;
 
 static std::string current_preset_name = g_Presets[0].name;
 static user_config conf("fp.ini");
@@ -898,85 +912,54 @@ static std::vector<application> WINAPI get_tasklist() {
 }
 
 
-struct audio_device {
-	std::wstring name;
-	ma_device_id id;
-};
-
-
-static audio_device g_CurrentInputDevice;
-static audio_device g_CurrentOutputDevice;
-
-static inline float* mix_f32(float* input1, float* input2, ma_uint32 frameCountFirst, ma_uint32 frameCountLast) {
-	float* result = new float[frameCountFirst + frameCountLast];
-	for (ma_uint32 i = 0; i < frameCountFirst + frameCountLast; i++) {
-		result[i] = (input1[i] + input2[i]);
-	}
-	return result;
-}
-
-enum EProcess : uint8_t {
-	PROCESS_NONE = 0,
-	PROCESS_MICROPHONE = 1 << 0,
-	PROCESS_LOOPBACK = 1 << 2
-};
-
-static std::atomic<uint8_t> g_Process = PROCESS_NONE;
-
 struct AudioData {
 	float* buffer;
 	ma_uint32 frameCount;
 };
 
-std::deque<AudioData> microphoneQueue;
-std::deque<AudioData> loopbackQueue;
-std::mutex microphoneMutex;
-std::mutex loopbackMutex;
-std::condition_variable microphoneCondition;
-std::condition_variable loopbackCondition;
+struct RecordingSource {
+	std::deque<AudioData> queue;
+	std::mutex mutex;
+	std::condition_variable condition;
+	std::wstring name;
+};
+
+struct CallbackUserData {
+	size_t sourceIndex;
+};
+
+
+static std::vector<std::unique_ptr<RecordingSource>> g_RecordingSources;
+static std::vector<std::unique_ptr<CallbackUserData>> g_CallbackUserData;
+static std::vector<audio_device> g_SelectedCaptureDevices;
+static std::vector<audio_device> g_SelectedLoopbackDevices;
 
 static std::atomic<bool> thread_shutdown = false;
 static std::atomic<bool> paused = false;
 
 class MINIAUDIO_IMPLEMENTATION CAudioRecorder {
-	std::thread m_MixingThread;
-	std::array<std::unique_ptr<ma_encoder>, 2> encoder;
-	std::unique_ptr<ma_device> recording_device;
-	std::unique_ptr<ma_device> loopback_device;
+	std::thread m_ProcessingThread;
+	std::vector<std::unique_ptr<ma_device>> m_devices;
+	std::vector<std::unique_ptr<ma_encoder>> m_encoders;
 	std::unique_ptr<ma_data_converter> m_Converter;
 
 public:
-	std::string filename;
+	std::string base_filename;
 
-	CAudioRecorder() : recording_device(nullptr), loopback_device(nullptr), m_Converter(nullptr) { encoder[0].reset(); encoder[1].reset(); }
+	CAudioRecorder() : m_Converter(nullptr) {}
 	~CAudioRecorder() {
-		if (g_Recording)
+		if (g_Recording) {
 			this->stop();
+		}
 	}
 
-	static void MicrophoneCallback(ma_device* pDevice, void* pOutput, const void* pInput, ma_uint32 frameCount) {
-		if (paused || !(g_Process & PROCESS_MICROPHONE)) return;
-
-		float* buffer = new float[frameCount * channels];
-		memcpy(buffer, pInput, frameCount * channels * sizeof(float));
-
-		AudioData data;
-		data.buffer = buffer;
-		data.frameCount = frameCount;
-
-
-		{
-			std::lock_guard<std::mutex> lock(microphoneMutex);
-			microphoneQueue.push_back(data);
+	static void GeneralDataCallback(ma_device* pDevice, void* pOutput, const void* pInput, ma_uint32 frameCount) {
+		auto* pUserData = static_cast<CallbackUserData*>(pDevice->pUserData);
+		if (paused || !pUserData || pUserData->sourceIndex >= g_RecordingSources.size()) {
+			return;
 		}
 
-		microphoneCondition.notify_one();
-
-		(void)pOutput;
-	}
-
-	static void LoopbackCallback(ma_device* pDevice, void* pOutput, const void* pInput, ma_uint32 frameCount) {
-		if (paused || !(g_Process & PROCESS_LOOPBACK)) return;
+		size_t index = pUserData->sourceIndex;
 
 		float* buffer = new float[frameCount * channels];
 		memcpy(buffer, pInput, frameCount * channels * sizeof(float));
@@ -986,242 +969,189 @@ public:
 		data.frameCount = frameCount;
 
 		{
-			std::lock_guard<std::mutex> lock(loopbackMutex);
-			loopbackQueue.push_back(data);
+			std::lock_guard<std::mutex> lock(g_RecordingSources[index]->mutex);
+			g_RecordingSources[index]->queue.push_back(data);
 		}
-
-		loopbackCondition.notify_one();
+		g_RecordingSources[index]->condition.notify_one();
 
 		(void)pOutput;
 	}
 
-	static void MixingThread(CAudioRecorder* recorder) {
-		while (!thread_shutdown && g_Running && recorder) {
-			AudioData microphoneData;
-			AudioData loopbackData;
-			bool microphoneDataAvailable = false;
-			bool loopbackDataAvailable = false;
-			if (g_Process & PROCESS_MICROPHONE) {
-				{
-					std::unique_lock<std::mutex> lock(microphoneMutex);
-					microphoneCondition.wait(lock, [&] { return !microphoneQueue.empty() || thread_shutdown; });
+	static float* mix_f32_multi(const std::vector<AudioData>& sources, ma_uint32& outFrameCount) {
+		if (sources.empty()) {
+			outFrameCount = 0;
+			return nullptr;
+		}
+
+		outFrameCount = sources[0].frameCount;
+		if (outFrameCount == 0) return nullptr;
+
+		float* mixedBuffer = new float[outFrameCount * channels];
+		memset(mixedBuffer, 0, outFrameCount * channels * sizeof(float));
+
+		for (const auto& source : sources) {
+			ma_uint32 framesToMix = std::min(outFrameCount, source.frameCount);
+			for (ma_uint32 i = 0; i < framesToMix * channels; ++i) {
+				mixedBuffer[i] += source.buffer[i];
+			}
+		}
+		return mixedBuffer;
+	}
+
+	static void ProcessingThread(CAudioRecorder* recorder) {
+		while (!thread_shutdown) {
+			std::vector<AudioData> dataToProcess;
+			dataToProcess.resize(g_RecordingSources.size());
+			bool allDataAvailable = true;
+
+			for (size_t i = 0; i < g_RecordingSources.size(); ++i) {
+				std::unique_lock<std::mutex> lock(g_RecordingSources[i]->mutex);
+				if (g_RecordingSources[i]->condition.wait_for(lock, std::chrono::milliseconds(100), [&] { return !g_RecordingSources[i]->queue.empty() || thread_shutdown; })) {
 					if (thread_shutdown) break;
-					microphoneData = microphoneQueue.front();
-					microphoneQueue.pop_front();
-					microphoneDataAvailable = true;
-				}
-			}
-			if (g_Process & PROCESS_LOOPBACK) {
-				{
-					std::unique_lock<std::mutex> lock(loopbackMutex);
-					loopbackCondition.wait(lock, [&] { return !loopbackQueue.empty() || thread_shutdown; });
-					if (thread_shutdown) {
-						if (microphoneDataAvailable) {
-							delete[] microphoneData.buffer;
-						}
-						break;
-					}
-					loopbackData = loopbackQueue.front();
-					loopbackQueue.pop_front();
-					loopbackDataAvailable = true;
-				}
-			}
-
-			if (microphoneDataAvailable && loopbackDataAvailable) {
-				if (!make_stems) {
-					float* mixedBuffer = mix_f32(microphoneData.buffer, loopbackData.buffer, microphoneData.frameCount, loopbackData.frameCount);
-
-					void* pInputOut = mixedBuffer;
-					ma_uint64 frameCountToProcess = microphoneData.frameCount;
-					ma_uint64 frameCountOut = microphoneData.frameCount;
-					if (buffer_format != ma_format_f32) {
-						ma_data_converter_process_pcm_frames__format_only(&*recorder->m_Converter, mixedBuffer, &frameCountToProcess, pInputOut, &frameCountOut);
-					}
-
-					ma_encoder_write_pcm_frames(&*recorder->encoder[0], pInputOut, frameCountOut, nullptr);
-
-					delete[] microphoneData.buffer;
-					delete[] loopbackData.buffer;
-					delete[] mixedBuffer;
+					dataToProcess[i] = g_RecordingSources[i]->queue.front();
+					g_RecordingSources[i]->queue.pop_front();
 				}
 				else {
-					void* pInputOut = microphoneData.buffer;
-					ma_uint64 frameCountToProcess = microphoneData.frameCount;
-					ma_uint64 frameCountOut = microphoneData.frameCount;
-					if (buffer_format != ma_format_f32) {
-						ma_data_converter_process_pcm_frames__format_only(&*recorder->m_Converter, microphoneData.buffer, &frameCountToProcess, pInputOut, &frameCountOut);
-					}
-
-					ma_encoder_write_pcm_frames(&*recorder->encoder[0], pInputOut, frameCountOut, nullptr);
-
-					delete[] microphoneData.buffer;
-					pInputOut = loopbackData.buffer;
-					frameCountToProcess = loopbackData.frameCount;
-					frameCountOut = loopbackData.frameCount;
-					if (buffer_format != ma_format_f32) {
-						ma_data_converter_process_pcm_frames__format_only(&*recorder->m_Converter, loopbackData.buffer, &frameCountToProcess, pInputOut, &frameCountOut);
-					}
-
-					ma_encoder_write_pcm_frames(&*recorder->encoder[1], pInputOut, frameCountOut, nullptr);
-
-					delete[] loopbackData.buffer;
+					allDataAvailable = false;
+					break;
 				}
 			}
 
-
-			else if (microphoneDataAvailable) {
-				void* pInputOut = microphoneData.buffer;
-				ma_uint64 frameCountToProcess = microphoneData.frameCount;
-				ma_uint64 frameCountOut = microphoneData.frameCount;
-				if (buffer_format != ma_format_f32) {
-					ma_data_converter_process_pcm_frames__format_only(&*recorder->m_Converter, microphoneData.buffer, &frameCountToProcess, pInputOut, &frameCountOut);
-				}
-
-				ma_encoder_write_pcm_frames(&*recorder->encoder[0], pInputOut, frameCountOut, nullptr);
-
-				delete[] microphoneData.buffer;
+			if (thread_shutdown) {
+				for (auto& data : dataToProcess) if (data.buffer) delete[] data.buffer;
+				break;
 			}
-			else if (loopbackDataAvailable) {
-				void* pInputOut = loopbackData.buffer;
-				ma_uint64 frameCountToProcess = loopbackData.frameCount;
-				ma_uint64 frameCountOut = loopbackData.frameCount;
-				if (buffer_format != ma_format_f32) {
-					ma_data_converter_process_pcm_frames__format_only(&*recorder->m_Converter, loopbackData.buffer, &frameCountToProcess, pInputOut, &frameCountOut);
+
+			if (!allDataAvailable) {
+				for (size_t i = 0; i < dataToProcess.size(); ++i) {
+					if (dataToProcess[i].buffer) {
+						std::lock_guard<std::mutex> lock(g_RecordingSources[i]->mutex);
+						g_RecordingSources[i]->queue.push_front(dataToProcess[i]);
+					}
 				}
+				continue;
+			}
 
-				ma_encoder_write_pcm_frames(&*recorder->encoder[0], pInputOut, frameCountOut, nullptr);
-
-				delete[] loopbackData.buffer;
+			if (make_stems) {
+				for (size_t i = 0; i < dataToProcess.size(); ++i) {
+					ma_encoder_write_pcm_frames(&*recorder->m_encoders[i], dataToProcess[i].buffer, dataToProcess[i].frameCount, nullptr);
+					delete[] dataToProcess[i].buffer;
+				}
+			}
+			else {
+				ma_uint32 frameCount;
+				float* mixedBuffer = mix_f32_multi(dataToProcess, frameCount);
+				if (mixedBuffer) {
+					ma_encoder_write_pcm_frames(&*recorder->m_encoders[0], mixedBuffer, frameCount, nullptr);
+					delete[] mixedBuffer;
+				}
+				for (auto& data : dataToProcess) delete[] data.buffer;
 			}
 		}
 	}
 
-	void start() {
-		microphoneQueue.clear();
-		loopbackQueue.clear();
-		ma_data_converter_config converter_config = ma_data_converter_config_init(ma_format_f32, buffer_format, channels, channels, sample_rate, sample_rate);
-		m_Converter = std::make_unique<ma_data_converter>();
-		CheckIfError(ma_data_converter_init(&converter_config, nullptr, &*m_Converter));
-		if (!std::filesystem::exists(record_path)) {
-			std::filesystem::create_directory(record_path);
-		}
-		std::filesystem::path file = !g_CommandLineOptions.useFilename ? record_path / get_now() : record_path / g_CommandLineOptions.filename;
-		if (g_CommandLineOptions.useFilename) {
-			g_CommandLineOptions.useFilename = false;
-			g_CommandLineOptions.filename = "";
-		}
-		filename = file.generic_string();
+	void start(const std::vector<ConfiguredSource>& sources) {
+		stop();
+		g_RecordingSources.clear();
+		g_CallbackUserData.clear();
 
+		if (sources.empty()) {
+			g_SpeechProvider.Speak("No devices configured for recording.", true);
+			return;
+		}
+
+		for (const ConfiguredSource& source : sources) {
+			g_RecordingSources.push_back(std::make_unique<RecordingSource>());
+			g_RecordingSources.back()->name = source.custom_name;
+		}
+
+		base_filename = (record_path / get_now()).generic_string();
 		ma_encoder_config encoderConfig = ma_encoder_config_init(ma_encoding_format_wav, buffer_format, channels, sample_rate);
+
 		if (make_stems) {
-			std::string stem;
-			stem = filename + " Mic.wav";
-			encoder[0] = std::make_unique<ma_encoder>();
-			CheckIfError(ma_encoder_init_file(stem.c_str(), &encoderConfig, &*encoder[0]));
-			stem = filename + " Loopback.wav";
-			if (g_MaLastError == MA_SUCCESS) {
-				encoder[1] = std::make_unique<ma_encoder>();
-				CheckIfError(ma_encoder_init_file(stem.c_str(), &encoderConfig, &*encoder[1]));
+			m_encoders.resize(sources.size());
+			for (size_t i = 0; i < sources.size(); ++i) {
+				std::string custom_name_narrow;
+				CStringUtils::UnicodeConvert(sources[i].custom_name, custom_name_narrow);
+				CStringUtils::Replace(custom_name_narrow, "\"", "", true);
+				CStringUtils::Replace(custom_name_narrow, "\\", "", true);
+				std::string stem_filename = base_filename + " (" + custom_name_narrow + ").wav";
+
+				m_encoders[i] = std::make_unique<ma_encoder>();
+				CheckIfError(ma_encoder_init_file(stem_filename.c_str(), &encoderConfig, &*m_encoders[i]));
 			}
 		}
 		else {
-			encoder[0] = std::make_unique<ma_encoder>();
-			CheckIfError(ma_encoder_init_file(std::string(filename + ".wav").c_str(), &encoderConfig, &*encoder[0]));
+			m_encoders.resize(1);
+			m_encoders[0] = std::make_unique<ma_encoder>();
+			CheckIfError(ma_encoder_init_file(std::string(base_filename + ".wav").c_str(), &encoderConfig, &*m_encoders[0]));
 		}
-		if (g_CurrentInputDevice.name != L"Not used") {
-			ma_device_config deviceConfig = ma_device_config_init(ma_device_type_capture);
-			if (g_CurrentInputDevice.name != L"Default")
-				deviceConfig.capture.pDeviceID = &g_CurrentInputDevice.id;
+
+		m_devices.resize(sources.size());
+		for (size_t i = 0; i < sources.size(); ++i) {
+			g_CallbackUserData.push_back(std::make_unique<CallbackUserData>(CallbackUserData{ i }));
+
+			ma_device_config deviceConfig = ma_device_config_init(sources[i].type);
+			deviceConfig.capture.pDeviceID = (ma_device_id*)&sources[i].device.id;
 			deviceConfig.capture.format = ma_format_f32;
 			deviceConfig.capture.channels = channels;
 			deviceConfig.sampleRate = sample_rate;
-			deviceConfig.periodSizeInMilliseconds = buffer_size;
-			deviceConfig.periods = periods;
-			deviceConfig.dataCallback = CAudioRecorder::MicrophoneCallback;
-			deviceConfig.pUserData = &*encoder[0];
-			recording_device = std::make_unique<ma_device>();
-			CheckIfError(ma_device_init(CSingleton<CAudioContext>::GetInstance(), &deviceConfig, &*recording_device));
-			CheckIfError(ma_device_start(&*recording_device));
-			g_Process |= PROCESS_MICROPHONE;
+			deviceConfig.dataCallback = CAudioRecorder::GeneralDataCallback;
+			deviceConfig.pUserData = g_CallbackUserData.back().get();
+
+			m_devices[i] = std::make_unique<ma_device>();
+			CheckIfError(ma_device_init(CSingleton<CAudioContext>::GetInstance(), &deviceConfig, &*m_devices[i]));
 		}
-		if (g_CurrentOutputDevice.name != L"Not used") {
-			ma_device_config deviceConfig = ma_device_config_init(ma_device_type_loopback);
-			deviceConfig.capture.pDeviceID = &g_CurrentOutputDevice.id;;
-			deviceConfig.capture.format = ma_format_f32;
-			deviceConfig.capture.channels = channels;
-			deviceConfig.sampleRate = sample_rate;
-			deviceConfig.periodSizeInMilliseconds = buffer_size;
-			deviceConfig.dataCallback = CAudioRecorder::LoopbackCallback;
-			deviceConfig.pUserData = make_stems ? &*encoder[1] : &*encoder[0];
 
-			loopback_device = std::make_unique<ma_device>();
-
-			CheckIfError(ma_device_init(CSingleton<CAudioContext>::GetInstance(), &deviceConfig, &*loopback_device));
-			CheckIfError(ma_device_start(&*loopback_device));
-			g_Process |= PROCESS_LOOPBACK;
+		for (auto& device : m_devices) {
+			CheckIfError(ma_device_start(&*device));
 		}
 		thread_shutdown.store(false);
-		m_MixingThread = std::thread(CAudioRecorder::MixingThread, this);
-		m_MixingThread.detach();
-
+		m_ProcessingThread = std::thread(CAudioRecorder::ProcessingThread, this);
+		g_Recording = true;
 	}
+
 	void stop() {
-		if (g_Process & PROCESS_MICROPHONE) {
-			ma_device_uninit(&*recording_device);
-			recording_device.reset();
-			g_Process &= ~PROCESS_MICROPHONE;
+		if (!g_Recording && m_devices.empty()) return;
+		g_Recording = false;
+
+		for (auto& device : m_devices) {
+			if (device) ma_device_uninit(&*device);
 		}
-		if (g_Process & PROCESS_LOOPBACK) {
-			g_Process &= ~PROCESS_LOOPBACK;
-			ma_device_uninit(&*loopback_device);
-			loopback_device.reset();
-		}
-		if (make_stems) {
-			ma_encoder_uninit(&*encoder[1]);
-			encoder[1].reset();
-		}
-		ma_encoder_uninit(&*encoder[0]);
-		encoder[0].reset();
-		if (m_Converter) {
-			ma_data_converter_uninit(&*m_Converter, nullptr);
-			m_Converter.reset();
-		}
+		m_devices.clear();
+
 		thread_shutdown.store(true);
-		microphoneCondition.notify_one();
-		loopbackCondition.notify_one();
-		if (m_MixingThread.joinable()) {
-			m_MixingThread.join();
+		for (auto& source : g_RecordingSources) {
+			source->condition.notify_all();
 		}
-		{
-			std::lock_guard<std::mutex> lock(microphoneMutex);
-			while (!microphoneQueue.empty()) {
-				delete[] microphoneQueue.front().buffer;
-				microphoneQueue.pop_front();
+		if (m_ProcessingThread.joinable()) {
+			m_ProcessingThread.join();
+		}
+
+		for (auto& encoder : m_encoders) {
+			if (encoder) ma_encoder_uninit(&*encoder);
+		}
+		m_encoders.clear();
+
+		for (auto& source : g_RecordingSources) {
+			std::lock_guard<std::mutex> lock(source->mutex);
+			while (!source->queue.empty()) {
+				delete[] source->queue.front().buffer;
+				source->queue.pop_front();
 			}
 		}
-		{
-			std::lock_guard<std::mutex> lock(loopbackMutex);
-			while (!loopbackQueue.empty()) {
-				delete[] loopbackQueue.front().buffer;
-				loopbackQueue.pop_front();
-			}
-		}
+		g_RecordingSources.clear();
+		g_CallbackUserData.clear();
 		g_Running = !g_CommandLineOptions.exitAfterStop;
 	}
+
 	void pause() {
 		paused.store(true);
-		{
-			std::lock_guard<std::mutex> lock(microphoneMutex);
-			while (!microphoneQueue.empty()) {
-				delete[] microphoneQueue.front().buffer;
-				microphoneQueue.pop_front();
-			}
-		}
-		{
-			std::lock_guard<std::mutex> lock(loopbackMutex);
-			while (!loopbackQueue.empty()) {
-				delete[] loopbackQueue.front().buffer;
-				loopbackQueue.pop_front();
+		for (auto& source : g_RecordingSources) {
+			std::lock_guard<std::mutex> lock(source->mutex);
+			while (!source->queue.empty()) {
+				delete[] source->queue.front().buffer;
+				source->queue.pop_front();
 			}
 		}
 	}
@@ -1367,65 +1297,49 @@ static void set_list_selection_by_text_internal(HWND list_hwnd, const std::wstri
 class CMainWindow final : public virtual IWindow {
 public:
 	HWND record_start = nullptr;
-	HWND input_devices_text = nullptr;
-	HWND input_devices_list = nullptr;
-	HWND output_devices_text = nullptr;
-	HWND output_devices_list = nullptr;
+	HWND sources_list_text = nullptr;
+	HWND sources_list = nullptr;
+	HWND add_source_btn = nullptr;
+	HWND remove_source_btn = nullptr;
 	HWND record_manager = nullptr;
 	HWND settings_button = nullptr;
 
-	void build()override {
+	void build() override {
+		this->reset();
 		std::wstring wsHkStartStop; CStringUtils::UnicodeConvert(hotkey_start_stop, wsHkStartStop);
-		g_CurrentInputDevice.name = L"Default";
-		g_CurrentOutputDevice.name = L"Not used";
+
 		record_start = create_button(window, std::wstring(L"Start recording (" + wsHkStartStop + L")").c_str(), 10, 10, 200, 50, 0);
 		push(record_start);
 
-		input_devices_text = create_text(window, L"&Input devices", 10, 70, 200, 20, 0);
+		sources_list_text = create_text(window, L"Recording Sources:", 10, 70, 200, 20, 0);
+		push(sources_list_text);
 
-		push(input_devices_text);
+		sources_list = create_list(window, 10, 90, 300, 150, 0);
+		push(sources_list);
+		update_sources_list();
 
-		input_devices_list = create_list(window, 10, 90, 200, 150, 0);
-		push(input_devices_list);
-		audio_device in;
-		audio_device out;
+		add_source_btn = create_button(window, L"Add Source...", 10, 250, 145, 30, 0);
+		push(add_source_btn);
+		remove_source_btn = create_button(window, L"Remove Selected", 165, 250, 145, 30, 0);
+		push(remove_source_btn);
 
-		g_InAudioDevices = get_input_audio_devices();
-		in.name = L"Default";
-		g_InAudioDevices.push_back(in);
-		in.name = L"Not used";
-		g_InAudioDevices.push_back(in);
-
-		for (const audio_device& dev : g_InAudioDevices) {
-			add_list_item(input_devices_list, dev.name.c_str());
-		}
-
-		focus(input_devices_list);
-		set_list_position(input_devices_list, input_device);
-		output_devices_text = create_text(window, L"&Output loopback devices", 10, 250, 200, 20, 0);
-		push(output_devices_text);
-
-		output_devices_list = create_list(window, 10, 270, 200, 150, 0);
-		push(output_devices_list);
-
-		g_OutAudioDevices = get_output_audio_devices();
-		out.name = L"Not used";
-		g_OutAudioDevices.push_back(out);
-
-		for (const audio_device& dev : g_OutAudioDevices) {
-			add_list_item(output_devices_list, dev.name.c_str());
-		}
-
-		focus(output_devices_list);
-		set_list_position(output_devices_list, loopback_device);
 		record_manager = create_button(window, L"Recordings manager", 10, 450, 200, 50, 0);
 		push(record_manager);
-		settings_button = create_button(window, L"Settings", 10, 450 + 50 + 10, 200, 50, 0); // y = 510
+		settings_button = create_button(window, L"Settings", 10, 450 + 50 + 10, 200, 50, 0);
 		push(settings_button);
 
 		focus(record_start);
 	}
 
+	void update_sources_list() {
+		if (!sources_list) return;
+		clear_list(sources_list);
+		for (const auto& source : g_ConfiguredSources) {
+			std::wstring type_str = (source.type == ma_device_type_capture) ? L"[Mic]" : L"[Loopback]";
+			std::wstring display_text = L"\"" + source.custom_name + L"\" " + type_str;
+			add_list_item(sources_list, display_text.c_str());
+		}
+	}
 };
 
 
@@ -1776,14 +1690,70 @@ public:
 };
 
 
+class CAddSourceWindow final : public virtual IWindow {
+public:
+	HWND lblName, editName;
+	HWND lblDevice, listDevices;
+	HWND btnOK, btnCancel;
+
+	std::vector<std::pair<audio_device, ma_device_type>> available_devices;
+
+	void build() override {
+		this->reset();
+		available_devices.clear();
+
+		int x_label = 10, x_control = 120;
+		int y_pos = 10;
+		int ctrl_height = 25, list_height = 200, label_width = 100, control_width = 300;
+		int y_spacing = 10;
+
+		lblName = create_text(window, L"Source Name:", x_label, y_pos, label_width, ctrl_height, 0); push(lblName);
+		push(lblName);
+		editName = create_input_box(window, false, false, x_control, y_pos, control_width, ctrl_height, 0); push(editName);
+		push(editName);
+		y_pos += ctrl_height + y_spacing;
+
+		lblDevice = create_text(window, L"Audio Device:", x_label, y_pos, label_width, ctrl_height, 0); push(lblDevice);
+		push(lblDevice);
+		listDevices = create_list(window, x_control, y_pos, control_width, list_height, 0);
+		push(listDevices);
+		y_pos += list_height + y_spacing * 2;
+
+		btnOK = create_button(window, L"OK", x_control, y_pos, 80, 30, 0); push(btnOK);
+		push(btnOK);
+		btnCancel = create_button(window, L"Cancel", x_control + 90, y_pos, 80, 30, 0); push(btnCancel);
+		push(btnCancel);
+
+		g_InAudioDevices = get_input_audio_devices();
+		for (const auto& dev : g_InAudioDevices) {
+			if (dev.name == L"Default" || dev.name == L"Not used") continue;
+			add_list_item(listDevices, dev.name.c_str());
+			available_devices.push_back({ dev, ma_device_type_capture });
+		}
+
+		size_t separator2_idx = g_InAudioDevices.size() - 1;
+
+		g_OutAudioDevices = get_output_audio_devices();
+		for (const auto& dev : g_OutAudioDevices) {
+			if (dev.name == L"Not used") continue;
+			add_list_item(listDevices, dev.name.c_str());
+			available_devices.push_back({ dev, ma_device_type_loopback });
+		}
 
 
+		focus(editName);
+	}
+};
+
+
+
+static CAddSourceWindow g_AddSourceWindow;
+static bool g_AddingSourceMode = false;
 
 static CMainWindow g_MainWindow;
 static CRecordManagerWindow g_RecordManagerWindow;
 static CRecordingWindow g_RecordingWindow;
 static CSettingsWindow g_SettingsWindow;
-
 
 
 bool g_RecordingsManager = false;
@@ -1833,10 +1803,6 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, wchar_t* lpCmd
 				}
 			}
 
-			std::string ind = conf.read("General", "input-device");
-			input_device = std::stoi(ind);
-			std::string oud = conf.read("General", "loopback-device");
-			loopback_device = std::stoi(oud);
 			std::string sevents = conf.read("General", "sound-events");
 			auto result = str_to_bool(sevents);
 			if (!result.has_value()) {
@@ -1933,8 +1899,6 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, wchar_t* lpCmd
 		conf.write("General", "filename-signature", filename_signature);
 		conf.write("General", "record-path", record_path.generic_string());
 		conf.write("General", "audio-format", audio_format);
-		conf.write("General", "input-device", std::to_string(input_device));
-		conf.write("General", "loopback-device", std::to_string(loopback_device));
 		conf.write("General", "sound-events", std::to_string(sound_events));
 		conf.write("General", "make-stems", std::to_string(make_stems));
 		std::string s_format;
@@ -2001,11 +1965,6 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, wchar_t* lpCmd
 				break;
 			}
 			if (!g_Recording && !g_RecordingsManager && !g_SettingsMode && is_pressed(g_MainWindow.settings_button)) {
-				loopback_device = get_list_position(g_MainWindow.output_devices_list);
-				input_device = get_list_position(g_MainWindow.input_devices_list);
-				conf.write("General", "input-device", std::to_string(input_device));
-				conf.write("General", "loopback-device", std::to_string(loopback_device));
-
 				g_MainWindow.reset();
 				g_SettingsWindow.build();
 				g_SettingsMode = true;
@@ -2066,11 +2025,6 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, wchar_t* lpCmd
 			}
 
 			if (is_pressed(g_MainWindow.record_manager) and !g_RecordingsManager) {
-				loopback_device = get_list_position(g_MainWindow.output_devices_list);
-				input_device = get_list_position(g_MainWindow.input_devices_list);
-				conf.write("General", "input-device", std::to_string(input_device));
-				conf.write("General", "loopback-device", std::to_string(loopback_device));
-				conf.save();
 				g_MainWindow.reset();
 				g_RecordManagerWindow.build();
 				if (sound_events)		g_SoundStream.PlayEvent(CSoundStream::SOUND_EVENT_RECORD_MANAGER);
@@ -2123,29 +2077,79 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, wchar_t* lpCmd
 					}
 				}
 			}
-			if (!g_Recording && (is_pressed(g_MainWindow.record_start) || g_CommandLineOptions.start || hotkey_pressed(HOTKEY_STARTSTOP))) {
-				g_CommandLineOptions.start = false;
-				loopback_device = get_list_position(g_MainWindow.output_devices_list);
-				input_device = get_list_position(g_MainWindow.input_devices_list);
-				conf.write("General", "input-device", std::to_string(input_device));
-				conf.write("General", "loopback-device", std::to_string(loopback_device));
-				conf.save();
-				if (sound_events)		g_SoundStream.PlayEvent(CSoundStream::SOUND_EVENT_START_RECORDING);
-				g_CurrentInputDevice = g_InAudioDevices[input_device];
-				g_CurrentOutputDevice = g_OutAudioDevices[loopback_device];
-				if (g_CurrentInputDevice.name == L"Not used" && g_CurrentOutputDevice.name == L"Not used") {
-					if (sound_events)		g_SoundStream.PlayEvent(CSoundStream::SOUND_EVENT_ERROR);
-					g_SpeechProvider.Speak("Can't record silence", true);
-					if (sound_events)		g_SoundStream.PlayEvent(CSoundStream::SOUND_EVENT_STOP_RECORDING);
 
-					continue;
+
+			if (!g_Recording && !g_RecordingsManager && !g_SettingsMode && !g_AddingSourceMode) {
+				if (is_pressed(g_MainWindow.add_source_btn)) {
+					g_AddSourceWindow.build();
+					g_AddingSourceMode = true;
 				}
-				g_MainWindow.reset();
-				g_RecordingWindow.build();
-				g_AudioRecorder.start();
-				g_Recording = true;
-				g_RecordingPaused = false;
+
+				if (is_pressed(g_MainWindow.remove_source_btn)) {
+					int selection = get_list_position(g_MainWindow.sources_list);
+					if (selection >= 0 && static_cast<size_t>(selection) < g_ConfiguredSources.size()) {
+						g_ConfiguredSources.erase(g_ConfiguredSources.begin() + selection);
+						g_MainWindow.update_sources_list();
+					}
+				}
+
+				if (is_pressed(g_MainWindow.record_start) || hotkey_pressed(HOTKEY_STARTSTOP) || g_CommandLineOptions.start) {
+					if (!g_ConfiguredSources.empty()) {
+						if (sound_events) g_SoundStream.PlayEvent(CSoundStream::SOUND_EVENT_START_RECORDING);
+
+						g_MainWindow.reset();
+						g_RecordingWindow.build();
+						g_AudioRecorder.start(g_ConfiguredSources);
+						g_RecordingPaused = false;
+					}
+					else {
+						g_SpeechProvider.Speak("Please add at least one audio source before recording.", true);
+					}
+				}
 			}
+
+			if (g_AddingSourceMode) {
+				if (is_pressed(g_AddSourceWindow.btnCancel) || key_down(VK_ESCAPE)) {
+					g_AddSourceWindow.reset();
+					focus(g_MainWindow.add_source_btn);
+					g_AddingSourceMode = false;
+				}
+				else if (is_pressed(g_AddSourceWindow.btnOK)) {
+					std::wstring name = get_text(g_AddSourceWindow.editName);
+					int selection_idx = get_list_position(g_AddSourceWindow.listDevices);
+					std::wstring selected_device_name = get_list_item_text_by_index_internal(g_AddSourceWindow.listDevices, selection_idx);
+
+					if (name.empty()) {
+						alert(L"Input Error", L"Please provide a name for the source.", MB_ICONWARNING);
+						focus(g_AddSourceWindow.editName);
+					}
+					else if (selection_idx < 0 || selected_device_name.find(L"---") != std::wstring::npos) {
+						alert(L"Input Error", L"Please select a valid audio device.", MB_ICONWARNING);
+						focus(g_AddSourceWindow.listDevices);
+					}
+					else {
+						bool found = false;
+						for (const auto& available_dev : g_AddSourceWindow.available_devices) {
+							if (available_dev.first.name == selected_device_name) {
+								g_ConfiguredSources.push_back({ name, available_dev.first, available_dev.second });
+								found = true;
+								break;
+							}
+						}
+
+						if (found) {
+							g_MainWindow.update_sources_list();
+							g_AddSourceWindow.reset();
+							focus(g_MainWindow.add_source_btn);
+							g_AddingSourceMode = false;
+						}
+						else {
+							alert(L"Internal Error", L"Could not find the selected device data.", MB_ICONERROR);
+						}
+					}
+				}
+			}
+
 			if (g_Recording && (is_pressed(g_RecordingWindow.record_stop) || hotkey_pressed(HOTKEY_STARTSTOP))) {
 				g_AudioRecorder.stop();
 				if (sound_events)		g_SoundStream.PlayEvent(CSoundStream::SOUND_EVENT_STOP_RECORDING);
@@ -2159,10 +2163,10 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, wchar_t* lpCmd
 
 				else if (audio_format != CStringUtils::ToLowerCase("wav")) {
 					string output;
-					std::vector<std::string> split = CStringUtils::Split(".wav", g_AudioRecorder.filename);
+					std::vector<std::string> split = CStringUtils::Split(".wav", g_AudioRecorder.base_filename);
 					g_SpeechProvider.Speak("Converting...");
 					std::string cmd = g_CurrentPreset.command;
-					CStringUtils::Replace(cmd, "%I", "\"" + g_AudioRecorder.filename + ".wav\"", true);
+					CStringUtils::Replace(cmd, "%I", "\"" + g_AudioRecorder.base_filename + ".wav\"", true);
 					CStringUtils::Replace(cmd, "%i", "\"" + split[0] + "\"", true);
 					CStringUtils::Replace(cmd, "%f", audio_format, true);
 					cmd.append(" -y"); // If ffmpeg will attempt to ask about overwrite, we add this flag to avoid stdin locks
@@ -2175,7 +2179,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, wchar_t* lpCmd
 					}
 					else {
 						std::wstring recording_name_u;
-						CStringUtils::UnicodeConvert(g_AudioRecorder.filename + ".wav", recording_name_u);
+						CStringUtils::UnicodeConvert(g_AudioRecorder.base_filename + ".wav", recording_name_u);
 						DeleteFile(recording_name_u.c_str());
 					}
 				}
@@ -2201,14 +2205,14 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, wchar_t* lpCmd
 			if (g_Recording && (is_pressed(g_RecordingWindow.record_restart) || hotkey_pressed(HOTKEY_RESTART))) {
 				wait(10);
 				std::wstring recording_name_u;
-				CStringUtils::UnicodeConvert(g_AudioRecorder.filename, recording_name_u);
+				CStringUtils::UnicodeConvert(g_AudioRecorder.base_filename, recording_name_u);
 				int result = alert(L"FPWarning", L"Are you sure you want to delete the recording \"" + recording_name_u + L"\" and rerecord it to new one? Old record can no longer be restored.", MB_YESNO | MB_ICONEXCLAMATION);
 				if (result == IDNO)continue;
 				else if (result == IDYES)
 				{
 					g_AudioRecorder.stop();
 				}
-				g_AudioRecorder.start();
+				g_AudioRecorder.start(g_ConfiguredSources);
 				g_Recording = true;
 				g_RecordingPaused = false;
 				window_reset();
