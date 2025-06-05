@@ -77,6 +77,24 @@ enum EHotKey {
 static int g_Retcode = 0;
 static bool g_Running = false;
 
+template <class T>
+class CSingleton {
+public:
+	static T& GetInstance() {
+		static T instance;
+		return instance;
+	}
+
+private:
+	CSingleton() = default;
+	~CSingleton() = default;
+
+	CSingleton(const CSingleton&) = delete;
+	CSingleton& operator=(const CSingleton&) = delete;
+	CSingleton(CSingleton&&) = delete;
+	CSingleton& operator=(CSingleton&&) = delete;
+};
+
 class CStringUtils {
 public:
 	static std::string ToUpperCase(const std::string& str) {
@@ -229,7 +247,7 @@ static ma_uint32 sample_rate = 44100;
 static ma_uint32 channels = 2;
 static ma_uint32 buffer_size = 0;
 static std::string filename_signature = "%Y %m %d %H %M %S";
-static std::string record_path = "recordings";
+static std::filesystem::path record_path = std::filesystem::current_path() / "recordings";
 static std::string audio_format = "wav";
 static int input_device = 0;
 static int loopback_device = 0;
@@ -368,7 +386,8 @@ public:
 	}
 };
 
-static CUIAutomationSpeech g_SpeechProvider;
+
+#define g_SpeechProvider CSingleton<CUIAutomationSpeech>::GetInstance()
 
 static int ExecSystemCmd(const std::string& str, std::string& out)
 {
@@ -577,7 +596,11 @@ static void CheckIfError(const ma_result& result) {
 	}
 	g_MaLastError = result;
 	std::wstring error_u;
-	CStringUtils::UnicodeConvert(ma_result_to_string(result).data(), error_u);
+	std::stringstream ss;
+	std::stacktrace st = std::stacktrace::current();
+	ss << ma_result_to_string(result).data() << std::endl;
+	ss << st;
+	CStringUtils::UnicodeConvert(ss.str(), error_u);
 	alert(L"FPRuntimeError", error_u, MB_ICONERROR);
 	g_Retcode = result;
 	g_Running = false;
@@ -605,8 +628,8 @@ public:
 	}
 };
 
+#define g_AudioContext CSingleton<CAudioContext>::GetInstance()
 
-static CAudioContext g_AudioContext;
 
 
 
@@ -627,7 +650,7 @@ public:
 		SOUND_EVENT_RECORD_MANAGER,
 		SOUND_EVENT_ERROR = -1,
 	};
-	CSoundStream() : m_Engine(nullptr), m_Player(nullptr), m_Waveform(nullptr) {}
+	CSoundStream() : m_Engine(nullptr), m_Player(nullptr), m_Waveform(nullptr) { Initialize(); }
 	~CSoundStream() {
 		Uninitialize();
 	}
@@ -770,7 +793,7 @@ public:
 	}
 };
 
-static CSoundStream g_SoundStream;
+#define g_SoundStream CSingleton<CSoundStream>::GetInstance()
 
 
 
@@ -853,7 +876,7 @@ struct application {
 	ma_uint32 id;
 };
 
-static const application g_LoopbackApplication{ L"", 0 };
+//static const application g_LoopbackApplication{ L"", 0 };
 
 static std::vector<application> WINAPI get_tasklist() {
 	std::vector<application> tasklist;
@@ -917,9 +940,6 @@ static std::atomic<bool> paused = false;
 
 class MINIAUDIO_IMPLEMENTATION CAudioRecorder {
 	std::thread m_MixingThread;
-	ma_device_config deviceConfig;
-	ma_device_config loopbackDeviceConfig;
-	ma_encoder_config encoderConfig;
 	std::array<std::unique_ptr<ma_encoder>, 2> encoder;
 	std::unique_ptr<ma_device> recording_device;
 	std::unique_ptr<ma_device> loopback_device;
@@ -1082,23 +1102,23 @@ public:
 		ma_data_converter_config converter_config = ma_data_converter_config_init(ma_format_f32, buffer_format, channels, channels, sample_rate, sample_rate);
 		m_Converter = std::make_unique<ma_data_converter>();
 		CheckIfError(ma_data_converter_init(&converter_config, nullptr, &*m_Converter));
-		std::wstring record_path_u;
-		CStringUtils::UnicodeConvert(record_path, record_path_u);
-		CreateDirectory(record_path_u.c_str(), nullptr);
-		std::string file = !g_CommandLineOptions.useFilename ? record_path + "/" + get_now() : record_path + "/" + g_CommandLineOptions.filename;
+		if (!std::filesystem::exists(record_path)) {
+			std::filesystem::create_directory(record_path);
+		}
+		std::filesystem::path file = !g_CommandLineOptions.useFilename ? record_path / get_now() : record_path / g_CommandLineOptions.filename;
 		if (g_CommandLineOptions.useFilename) {
 			g_CommandLineOptions.useFilename = false;
 			g_CommandLineOptions.filename = "";
 		}
-		filename = file;
+		filename = file.generic_string();
 
-		encoderConfig = ma_encoder_config_init(ma_encoding_format_wav, buffer_format, channels, sample_rate);
+		ma_encoder_config encoderConfig = ma_encoder_config_init(ma_encoding_format_wav, buffer_format, channels, sample_rate);
 		if (make_stems) {
 			std::string stem;
-			stem = file + " Mic.wav";
+			stem = filename + " Mic.wav";
 			encoder[0] = std::make_unique<ma_encoder>();
 			CheckIfError(ma_encoder_init_file(stem.c_str(), &encoderConfig, &*encoder[0]));
-			stem = file + " Loopback.wav";
+			stem = filename + " Loopback.wav";
 			if (g_MaLastError == MA_SUCCESS) {
 				encoder[1] = std::make_unique<ma_encoder>();
 				CheckIfError(ma_encoder_init_file(stem.c_str(), &encoderConfig, &*encoder[1]));
@@ -1106,10 +1126,10 @@ public:
 		}
 		else {
 			encoder[0] = std::make_unique<ma_encoder>();
-			CheckIfError(ma_encoder_init_file(std::string(file + ".wav").c_str(), &encoderConfig, &*encoder[0]));
+			CheckIfError(ma_encoder_init_file(std::string(filename + ".wav").c_str(), &encoderConfig, &*encoder[0]));
 		}
 		if (g_CurrentInputDevice.name != L"Not used") {
-			deviceConfig = ma_device_config_init(ma_device_type_capture);
+			ma_device_config deviceConfig = ma_device_config_init(ma_device_type_capture);
 			if (g_CurrentInputDevice.name != L"Default")
 				deviceConfig.capture.pDeviceID = &g_CurrentInputDevice.id;
 			deviceConfig.capture.format = ma_format_f32;
@@ -1120,23 +1140,23 @@ public:
 			deviceConfig.dataCallback = CAudioRecorder::MicrophoneCallback;
 			deviceConfig.pUserData = &*encoder[0];
 			recording_device = std::make_unique<ma_device>();
-			CheckIfError(ma_device_init(g_AudioContext, &deviceConfig, &*recording_device));
+			CheckIfError(ma_device_init(CSingleton<CAudioContext>::GetInstance(), &deviceConfig, &*recording_device));
 			CheckIfError(ma_device_start(&*recording_device));
 			g_Process |= PROCESS_MICROPHONE;
 		}
 		if (g_CurrentOutputDevice.name != L"Not used") {
-			loopbackDeviceConfig = ma_device_config_init(ma_device_type_loopback);
-			loopbackDeviceConfig.capture.pDeviceID = &g_CurrentOutputDevice.id;;
-			loopbackDeviceConfig.capture.format = ma_format_f32;
-			loopbackDeviceConfig.capture.channels = channels;
-			loopbackDeviceConfig.sampleRate = sample_rate;
-			loopbackDeviceConfig.periodSizeInMilliseconds = buffer_size;
-			loopbackDeviceConfig.dataCallback = CAudioRecorder::LoopbackCallback;
-			loopbackDeviceConfig.pUserData = make_stems ? &*encoder[1] : &*encoder[0];
+			ma_device_config deviceConfig = ma_device_config_init(ma_device_type_loopback);
+			deviceConfig.capture.pDeviceID = &g_CurrentOutputDevice.id;;
+			deviceConfig.capture.format = ma_format_f32;
+			deviceConfig.capture.channels = channels;
+			deviceConfig.sampleRate = sample_rate;
+			deviceConfig.periodSizeInMilliseconds = buffer_size;
+			deviceConfig.dataCallback = CAudioRecorder::LoopbackCallback;
+			deviceConfig.pUserData = make_stems ? &*encoder[1] : &*encoder[0];
 
 			loopback_device = std::make_unique<ma_device>();
 
-			CheckIfError(ma_device_init(g_AudioContext, &loopbackDeviceConfig, &*loopback_device));
+			CheckIfError(ma_device_init(CSingleton<CAudioContext>::GetInstance(), &deviceConfig, &*loopback_device));
 			CheckIfError(ma_device_start(&*loopback_device));
 			g_Process |= PROCESS_LOOPBACK;
 		}
@@ -1211,6 +1231,7 @@ public:
 	}
 };
 
+#define g_AudioRecorder CSingleton<CAudioRecorder>::GetInstance()
 
 
 std::vector<audio_device> MA_API get_input_audio_devices()
@@ -1220,7 +1241,7 @@ std::vector<audio_device> MA_API get_input_audio_devices()
 	ma_uint32 captureDeviceCount;
 	ma_uint32 iCaptureDevice;
 
-	CheckIfError(ma_context_get_devices(g_AudioContext, nullptr, nullptr, &pCaptureDeviceInfos, &captureDeviceCount));
+	CheckIfError(ma_context_get_devices(CSingleton<CAudioContext>::GetInstance(), nullptr, nullptr, &pCaptureDeviceInfos, &captureDeviceCount));
 	for (iCaptureDevice = 0; g_MaLastError == MA_SUCCESS && iCaptureDevice < captureDeviceCount; ++iCaptureDevice) {
 		const char* name = pCaptureDeviceInfos[iCaptureDevice].name;
 		std::string name_str(name);
@@ -1241,7 +1262,7 @@ std::vector<audio_device> MA_API get_output_audio_devices()
 	ma_uint32 playbackDeviceCount;
 	ma_uint32 iPlaybackDevice;
 
-	CheckIfError(ma_context_get_devices(g_AudioContext, &pPlaybackDeviceInfos, &playbackDeviceCount, nullptr, nullptr));
+	CheckIfError(ma_context_get_devices(CSingleton<CAudioContext>::GetInstance(), &pPlaybackDeviceInfos, &playbackDeviceCount, nullptr, nullptr));
 	for (iPlaybackDevice = 0; g_MaLastError == MA_SUCCESS && iPlaybackDevice < playbackDeviceCount; ++iPlaybackDevice) {
 		const char* name = pPlaybackDeviceInfos[iPlaybackDevice].name;
 		std::string name_str(name);
@@ -1313,7 +1334,6 @@ static void window_reset() {
 }
 
 static const std::wstring version = L"0.0.1 Beta";
-static CAudioRecorder rec;
 
 
 static std::vector<audio_device> g_InAudioDevices;
@@ -1438,7 +1458,7 @@ public:
 		push(delete_button);
 		close_button = create_button(window, L"Close", 10, 10, 10, 10, 0);
 		push(close_button);
-		std::vector<std::wstring> files = get_files(std::wstring(record_path.begin(), record_path.end()));
+		std::vector<std::wstring> files = get_files(record_path.generic_wstring());
 		for (unsigned int i = 0; i < files.size(); i++) {
 			add_list_item(items_view_list, files[i].c_str());
 		}
@@ -1545,7 +1565,7 @@ public:
 		y_pos += ctrl_height + y_spacing;
 
 		push(create_text(window, L"Record Path:", x_label, y_pos, label_width, ctrl_height, 0));
-		std::wstring wsRecordPath; CStringUtils::UnicodeConvert(record_path, wsRecordPath);
+		std::wstring wsRecordPath = record_path.generic_wstring();
 		editRecordPath = create_input_box(window, false, false, x_control, y_pos, control_width, ctrl_height, 0); push(editRecordPath);
 		set_text(editRecordPath, wsRecordPath.c_str());
 		btnBrowseRecordPath = create_button(window, L"Browse...", x_button_browse, y_pos, 30, ctrl_height, 0); push(btnBrowseRecordPath);
@@ -1681,9 +1701,10 @@ public:
 
 		ws_val = get_text(editFilenameSignature); CStringUtils::UnicodeConvert(ws_val, filename_signature);
 		conf.write("General", "filename-signature", filename_signature);
-
-		ws_val = get_text(editRecordPath); CStringUtils::UnicodeConvert(ws_val, record_path);
-		conf.write("General", "record-path", record_path);
+		std::string path;
+		ws_val = get_text(editRecordPath); CStringUtils::UnicodeConvert(ws_val, path);
+		record_path = path;
+		conf.write("General", "record-path", record_path.generic_string());
 
 		ws_val = get_text(editAudioFormat); CStringUtils::UnicodeConvert(ws_val, audio_format);
 		audio_format = CStringUtils::ToLowerCase(audio_format);
@@ -1749,7 +1770,7 @@ public:
 			audio_format = command;
 			conf.write("General", "audio-format", audio_format);
 		}
-		g_SoundStream.Reinitialize(); // After a sample rate change
+		CSingleton<CSoundStream>::GetInstance().Reinitialize(); // After a sample rate change
 		conf.save();
 	}
 };
@@ -1910,7 +1931,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, wchar_t* lpCmd
 		conf.write("General", "channels", std::to_string(channels));
 		conf.write("General", "buffer-size", std::to_string(buffer_size));
 		conf.write("General", "filename-signature", filename_signature);
-		conf.write("General", "record-path", record_path);
+		conf.write("General", "record-path", record_path.generic_string());
 		conf.write("General", "audio-format", audio_format);
 		conf.write("General", "input-device", std::to_string(input_device));
 		conf.write("General", "loopback-device", std::to_string(loopback_device));
@@ -1971,7 +1992,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, wchar_t* lpCmd
 			if (gui::try_close) {
 				gui::try_close = false;
 				if (g_Recording) {
-					if (sound_events)		g_SoundStream.PlayEvent(CSoundStream::SOUND_EVENT_ERROR);
+					if (sound_events)g_SoundStream.PlayEvent(CSoundStream::SOUND_EVENT_ERROR);
 					g_SpeechProvider.Speak("Unable to exit, while recording.");
 					continue;
 				}
@@ -2054,7 +2075,6 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, wchar_t* lpCmd
 				g_RecordManagerWindow.build();
 				if (sound_events)		g_SoundStream.PlayEvent(CSoundStream::SOUND_EVENT_RECORD_MANAGER);
 				g_RecordingsManager = true;
-				g_SoundStream.Initialize();
 				key_pressed(VK_SPACE);
 			}
 			if (g_RecordingsManager) {
@@ -2066,21 +2086,18 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, wchar_t* lpCmd
 					focus(g_MainWindow.record_manager);
 					g_RecordingsManager = false;
 				}
-				std::wstring record_path_u;
-				CStringUtils::UnicodeConvert(record_path, record_path_u);
-				std::vector<wstring> files = get_files(record_path_u);
+				std::vector<wstring> files = get_files(record_path.generic_wstring());
 				if (files.size() == 0) {
 					if (sound_events)		g_SoundStream.PlayEvent(CSoundStream::SOUND_EVENT_ERROR);
-					g_SpeechProvider.Speak("There are no files in \"" + record_path + "\".");
+					g_SpeechProvider.Speak("There are no files in \"" + record_path.generic_string() + "\".");
 					g_RecordManagerWindow.reset();
 					g_MainWindow.build();
 					focus(g_MainWindow.record_manager);
 					g_RecordingsManager = false;
 				}
 				if ((key_pressed(VK_SPACE) && get_current_focus() == g_RecordManagerWindow.items_view_list) || is_pressed(g_RecordManagerWindow.play_button)) {
-					std::wstring record_path_u;
-					CStringUtils::UnicodeConvert(record_path, record_path_u);
-					g_SoundStream.Play(record_path_u + L"/" + get_focused_list_item_name(g_RecordManagerWindow.items_view_list));
+					std::filesystem::path file = record_path / get_focused_list_item_name(g_RecordManagerWindow.items_view_list);
+					g_SoundStream.Play(file.generic_string());
 					if (get_current_focus() == g_RecordManagerWindow.play_button)focus(g_RecordManagerWindow.pause_button);
 				}
 				if (is_pressed(g_RecordManagerWindow.pause_button)) {
@@ -2098,11 +2115,9 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, wchar_t* lpCmd
 					if (result == IDNO)continue;
 					else if (result == IDYES)
 					{
-						std::wstring record_path_u;
-						CStringUtils::UnicodeConvert(record_path, record_path_u);
-						std::wstring file = record_path_u + L"/" + get_focused_list_item_name(g_RecordManagerWindow.items_view_list);
+						std::filesystem::path file = record_path / get_focused_list_item_name(g_RecordManagerWindow.items_view_list);
 						g_SoundStream.Close();
-						DeleteFile(file.c_str());
+						std::filesystem::remove(file);
 						g_RecordManagerWindow.reset();
 						g_RecordManagerWindow.build();
 					}
@@ -2127,12 +2142,12 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, wchar_t* lpCmd
 				}
 				g_MainWindow.reset();
 				g_RecordingWindow.build();
-				rec.start();
+				g_AudioRecorder.start();
 				g_Recording = true;
 				g_RecordingPaused = false;
 			}
 			if (g_Recording && (is_pressed(g_RecordingWindow.record_stop) || hotkey_pressed(HOTKEY_STARTSTOP))) {
-				rec.stop();
+				g_AudioRecorder.stop();
 				if (sound_events)		g_SoundStream.PlayEvent(CSoundStream::SOUND_EVENT_STOP_RECORDING);
 				g_Recording = false;
 				g_RecordingWindow.reset();
@@ -2144,10 +2159,10 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, wchar_t* lpCmd
 
 				else if (audio_format != CStringUtils::ToLowerCase("wav")) {
 					string output;
-					std::vector<std::string> split = CStringUtils::Split(".wav", rec.filename);
+					std::vector<std::string> split = CStringUtils::Split(".wav", g_AudioRecorder.filename);
 					g_SpeechProvider.Speak("Converting...");
 					std::string cmd = g_CurrentPreset.command;
-					CStringUtils::Replace(cmd, "%I", "\"" + rec.filename + ".wav\"", true);
+					CStringUtils::Replace(cmd, "%I", "\"" + g_AudioRecorder.filename + ".wav\"", true);
 					CStringUtils::Replace(cmd, "%i", "\"" + split[0] + "\"", true);
 					CStringUtils::Replace(cmd, "%f", audio_format, true);
 					cmd.append(" -y"); // If ffmpeg will attempt to ask about overwrite, we add this flag to avoid stdin locks
@@ -2160,7 +2175,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, wchar_t* lpCmd
 					}
 					else {
 						std::wstring recording_name_u;
-						CStringUtils::UnicodeConvert(rec.filename + ".wav", recording_name_u);
+						CStringUtils::UnicodeConvert(g_AudioRecorder.filename + ".wav", recording_name_u);
 						DeleteFile(recording_name_u.c_str());
 					}
 				}
@@ -2170,14 +2185,14 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, wchar_t* lpCmd
 			if (g_Recording && (is_pressed(g_RecordingWindow.record_pause) || hotkey_pressed(HOTKEY_PAUSERESUME))) {
 				std::wstring wsHkPauseResume; CStringUtils::UnicodeConvert(hotkey_pause_resume, wsHkPauseResume);
 				if (!g_RecordingPaused) {
-					rec.pause();
+					g_AudioRecorder.pause();
 					if (sound_events)		g_SoundStream.PlayEvent(CSoundStream::SOUND_EVENT_PAUSE_RECORDING);
 					g_RecordingPaused = true;
 					set_text(g_RecordingWindow.record_pause, std::wstring(L"Resume recording (" + wsHkPauseResume + L")").c_str());
 				}
 				else if (g_RecordingPaused) {
 					if (sound_events)		g_SoundStream.PlayEvent(CSoundStream::SOUND_EVENT_RESUME_RECORDING);
-					rec.resume();
+					g_AudioRecorder.resume();
 					g_RecordingPaused = false;
 					set_text(g_RecordingWindow.record_pause, std::wstring(L"Pause recording (" + wsHkPauseResume + L")").c_str());
 				}
@@ -2186,14 +2201,14 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, wchar_t* lpCmd
 			if (g_Recording && (is_pressed(g_RecordingWindow.record_restart) || hotkey_pressed(HOTKEY_RESTART))) {
 				wait(10);
 				std::wstring recording_name_u;
-				CStringUtils::UnicodeConvert(rec.filename, recording_name_u);
+				CStringUtils::UnicodeConvert(g_AudioRecorder.filename, recording_name_u);
 				int result = alert(L"FPWarning", L"Are you sure you want to delete the recording \"" + recording_name_u + L"\" and rerecord it to new one? Old record can no longer be restored.", MB_YESNO | MB_ICONEXCLAMATION);
 				if (result == IDNO)continue;
 				else if (result == IDYES)
 				{
-					rec.stop();
+					g_AudioRecorder.stop();
 				}
-				rec.start();
+				g_AudioRecorder.start();
 				g_Recording = true;
 				g_RecordingPaused = false;
 				window_reset();
