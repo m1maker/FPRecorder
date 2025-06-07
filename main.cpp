@@ -914,7 +914,7 @@ static std::vector<application> WINAPI get_tasklist() {
 
 struct AudioData {
 	float* buffer;
-	ma_uint32 frameCount;
+	ma_uint64 frameCount;
 };
 
 struct RecordingSource {
@@ -977,7 +977,7 @@ public:
 		(void)pOutput;
 	}
 
-	static float* mix_f32_multi(const std::vector<AudioData>& sources, ma_uint32& outFrameCount) {
+	static float* mix_f32_multi(const std::vector<AudioData>& sources, ma_uint64& outFrameCount) {
 		if (sources.empty()) {
 			outFrameCount = 0;
 			return nullptr;
@@ -990,7 +990,7 @@ public:
 		memset(mixedBuffer, 0, outFrameCount * channels * sizeof(float));
 
 		for (const auto& source : sources) {
-			ma_uint32 framesToMix = std::min(outFrameCount, source.frameCount);
+			ma_uint64 framesToMix = std::min(outFrameCount, source.frameCount);
 			for (ma_uint32 i = 0; i < framesToMix * channels; ++i) {
 				mixedBuffer[i] += source.buffer[i];
 			}
@@ -1034,15 +1034,26 @@ public:
 
 			if (make_stems) {
 				for (size_t i = 0; i < dataToProcess.size(); ++i) {
-					ma_encoder_write_pcm_frames(&*recorder->m_encoders[i], dataToProcess[i].buffer, dataToProcess[i].frameCount, nullptr);
+					void* pOutput = dataToProcess[i].buffer;
+					ma_uint64 frameCount = dataToProcess[i].frameCount;
+					if (buffer_format != ma_format_f32) {
+						ma_data_converter_process_pcm_frames__format_only(&*recorder->m_Converter, dataToProcess[i].buffer, &dataToProcess[i].frameCount, pOutput, &frameCount);
+					}
+					ma_encoder_write_pcm_frames(&*recorder->m_encoders[i], pOutput, frameCount, nullptr);
 					delete[] dataToProcess[i].buffer;
 				}
 			}
 			else {
-				ma_uint32 frameCount;
+				ma_uint64 frameCount = 0;
 				float* mixedBuffer = mix_f32_multi(dataToProcess, frameCount);
 				if (mixedBuffer) {
-					ma_encoder_write_pcm_frames(&*recorder->m_encoders[0], mixedBuffer, frameCount, nullptr);
+					void* pOutput = mixedBuffer;
+					ma_uint64 frameCountOut = frameCount;
+					if (buffer_format != ma_format_f32) {
+						ma_data_converter_process_pcm_frames__format_only(&*recorder->m_Converter, mixedBuffer, &frameCount, pOutput, &frameCountOut);
+					}
+
+					ma_encoder_write_pcm_frames(&*recorder->m_encoders[0], pOutput, frameCountOut, nullptr);
 					delete[] mixedBuffer;
 				}
 				for (auto& data : dataToProcess) delete[] data.buffer;
@@ -1065,7 +1076,7 @@ public:
 			g_RecordingSources.back()->name = source.custom_name;
 		}
 
-		base_filename = (record_path / get_now()).generic_string();
+		base_filename = g_CommandLineOptions.useFilename ? (std::filesystem::path(record_path / g_CommandLineOptions.filename).generic_string()) : (record_path / get_now()).generic_string();
 		ma_encoder_config encoderConfig = ma_encoder_config_init(ma_encoding_format_wav, buffer_format, channels, sample_rate);
 
 		if (make_stems) {
@@ -1103,6 +1114,9 @@ public:
 			CheckIfError(ma_device_init(CSingleton<CAudioContext>::GetInstance(), &deviceConfig, &*m_devices[i]));
 		}
 
+		ma_data_converter_config cfg = ma_data_converter_config_init(ma_format_f32, buffer_format, channels, channels, sample_rate, sample_rate);
+		m_Converter = std::make_unique<ma_data_converter>();
+		CheckIfError(ma_data_converter_init(&cfg, nullptr, &*m_Converter));
 		for (auto& device : m_devices) {
 			CheckIfError(ma_device_start(&*device));
 		}
@@ -1115,6 +1129,10 @@ public:
 		if (!g_Recording && m_devices.empty()) return;
 		g_Recording = false;
 
+		if (m_Converter) {
+			ma_data_converter_uninit(&*m_Converter, nullptr);
+			m_Converter.reset();
+		}
 		for (auto& device : m_devices) {
 			if (device) ma_device_uninit(&*device);
 		}
@@ -1238,7 +1256,7 @@ public:
 		items.erase(items.begin() + index);
 	}
 
-	IWindow(HWND parent = window) : m_Parent(parent) {
+	explicit IWindow(HWND parent = window) : m_Parent(parent) {
 		this->reset();
 		g_Windows.push_back(this);
 		this->id = g_Windows.size() - 1;
@@ -1336,7 +1354,7 @@ public:
 		clear_list(sources_list);
 		for (const auto& source : g_ConfiguredSources) {
 			std::wstring type_str = (source.type == ma_device_type_capture) ? L"[Mic]" : L"[Loopback]";
-			std::wstring display_text = L"\"" + source.custom_name + L"\" " + type_str;
+			std::wstring display_text = source.custom_name + type_str;
 			add_list_item(sources_list, display_text.c_str());
 		}
 	}
@@ -1590,7 +1608,7 @@ public:
 		ws_val = get_text(editAudioFormat);
 		if (ws_val.empty()) { alert(L"Validation Error", L"Audio format cannot be empty.", MB_ICONERROR); focus(editAudioFormat); return false; }
 		if (is_checked(chkMakeStems) && ws_val != L"wav") {
-			alert(L"Validation Error", L"'Make Stems' is only supported with 'wav' audio format. Please change audio format to 'wav' or disable 'Make Stems'.", MB_ICONERROR);
+			alert(L"Validation Error", L"'Make Stems' is only supported with 'wav' audio format, but you selected '" + ws_val + L"'. Please change audio format to 'wav' or disable 'Make Stems'.", MB_ICONERROR);
 			return false;
 		}
 
