@@ -38,7 +38,7 @@
 #include <audioclient.h>
 #include <mmdeviceapi.h>
 #include <audioclientactivationparams.h>
-
+#include <mfapi.h>
 
 
 template<typename T, typename Func, typename ...Args>
@@ -983,7 +983,7 @@ static std::vector<audio_device> g_SelectedLoopbackDevices;
 static std::atomic<bool> thread_shutdown = false;
 static std::atomic<bool> paused = false;
 
-class CompletionHandler : public IActivateAudioInterfaceCompletionHandler {
+class CompletionHandler : public IActivateAudioInterfaceCompletionHandler, public IAgileObject {
 public:
 	CompletionHandler() : _refCount(1), activate_hr(E_FAIL), client(nullptr) {
 		event_finished = CreateEvent(nullptr, TRUE, FALSE, nullptr);
@@ -1005,6 +1005,11 @@ public:
 	}
 	HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void** ppvObject) override {
 		if (riid == IID_IUnknown || riid == __uuidof(IActivateAudioInterfaceCompletionHandler)) {
+			*ppvObject = this;
+			AddRef();
+			return S_OK;
+		}
+		else if (riid == __uuidof(IAgileObject)) {
 			*ppvObject = this;
 			AddRef();
 			return S_OK;
@@ -1073,6 +1078,7 @@ public:
 	void Start() {
 		m_shutdown_flag = false;
 		m_thread = std::thread(&AppLoopbackCapture::CaptureThread, this);
+		m_thread.detach();
 	}
 
 	void Stop() {
@@ -1084,7 +1090,7 @@ public:
 
 private:
 	void CaptureThread() {
-		CoInitializeEx(NULL, COINIT_MULTITHREADED);
+		CoInitializeEx(NULL, COINIT_APARTMENTTHREADED);
 
 		if (!InitClient()) {
 			CoUninitialize();
@@ -1120,7 +1126,7 @@ private:
 
 	bool InitClient() {
 		HRESULT hr;
-
+		hr = MFStartup(MF_VERSION, MFSTARTUP_LITE);
 		AUDIOCLIENT_ACTIVATION_PARAMS activationParams = {};
 		activationParams.ActivationType = AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK;
 		activationParams.ProcessLoopbackParams.TargetProcessId = m_pid;
@@ -1133,9 +1139,9 @@ private:
 
 		CompletionHandler* handler = new CompletionHandler();
 		IActivateAudioInterfaceAsyncOperation* async_op = nullptr;
-
 		hr = ActivateAudioInterfaceAsync(VIRTUAL_AUDIO_DEVICE_PROCESS_LOOPBACK, __uuidof(IAudioClient), &propVariant, handler, &async_op);
 		if (FAILED(hr)) {
+			alert(L"YY", std::to_wstring(hr), 0);
 			handler->Release();
 			if (async_op) async_op->Release();
 			return false;
@@ -1153,7 +1159,7 @@ private:
 		handler->client = nullptr;
 		handler->Release();
 
-		hr = m_client->Initialize(AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_LOOPBACK | AUDCLNT_STREAMFLAGS_EVENTCALLBACK, 100 * 10000, 0, &m_format, NULL);
+		hr = m_client->Initialize(AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_LOOPBACK | AUDCLNT_STREAMFLAGS_EVENTCALLBACK | AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM, 100 * 10000, 0, &m_format, NULL);
 		if (FAILED(hr)) {
 			m_client->Release();
 			m_client = nullptr;
