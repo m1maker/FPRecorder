@@ -35,6 +35,11 @@
 #include <condition_variable>
 #include <string_view>
 
+#include <audioclient.h>
+#include <mmdeviceapi.h>
+#include <audioclientactivationparams.h>
+
+
 
 template<typename T, typename Func, typename ...Args>
 inline void safeCall(T* obj, Func func, Args... args) {
@@ -266,15 +271,29 @@ struct audio_device {
 
 
 
+enum SourceType {
+	DEVICE_CAPTURE,
+	DEVICE_LOOPBACK,
+	APP_LOOPBACK
+};
+
+struct application {
+	std::wstring name;
+	ma_uint32 id;
+};
+
 struct ConfiguredSource {
 	std::wstring custom_name;
+	SourceType type;
+
 	audio_device device;
-	ma_device_type type;
+	application app;
 };
 
 static std::vector<ConfiguredSource> g_ConfiguredSources;
 
 static std::string current_preset_name = g_Presets[0].name;
+
 static user_config conf("fp.ini");
 
 static inline std::string _cdecl get_now(bool filename = true) {
@@ -860,6 +879,39 @@ static bool ma_format_convert(const ma_format& format, std::string& value) {
 }
 
 
+static bool ma_device_type_convert(const std::string& type, ma_device_type& value)
+{
+	std::string str = CStringUtils::ToLowerCase(type);
+	if (str == "mic") {
+		value = ma_device_type_capture;
+	}
+	else if (str == "loopback") {
+		value = ma_device_type_loopback;
+	}
+	else {
+		return false;
+	}
+
+	return true;
+}
+
+static bool ma_device_type_convert(const ma_device_type& type, std::string& value) {
+	switch (type) {
+	case ma_device_type_capture:
+		value = "mic";
+		break;
+	case ma_device_type_loopback:
+		value = "loopback";
+		break;
+	default:
+		return false;
+	}
+	return true;
+}
+
+
+
+
 
 static inline std::optional<bool> str_to_bool(const std::string& val) {
 	std::string str = CStringUtils::ToLowerCase(val);
@@ -885,12 +937,6 @@ using namespace std;
 
 bool g_Recording = false;
 bool g_RecordingPaused = false;
-struct application {
-	std::wstring name;
-	ma_uint32 id;
-};
-
-//static const application g_LoopbackApplication{ L"", 0 };
 
 static std::vector<application> WINAPI get_tasklist() {
 	std::vector<application> tasklist;
@@ -937,11 +983,234 @@ static std::vector<audio_device> g_SelectedLoopbackDevices;
 static std::atomic<bool> thread_shutdown = false;
 static std::atomic<bool> paused = false;
 
+class CompletionHandler : public IActivateAudioInterfaceCompletionHandler {
+public:
+	CompletionHandler() : _refCount(1), activate_hr(E_FAIL), client(nullptr) {
+		event_finished = CreateEvent(nullptr, TRUE, FALSE, nullptr);
+	}
+
+	~CompletionHandler() {
+		if (event_finished) CloseHandle(event_finished);
+		if (client) client->Release();
+	}
+
+	// IUnknown
+	ULONG STDMETHODCALLTYPE AddRef() override { return InterlockedIncrement(&_refCount); }
+	ULONG STDMETHODCALLTYPE Release() override {
+		ULONG ulRef = InterlockedDecrement(&_refCount);
+		if (0 == ulRef) {
+			delete this;
+		}
+		return ulRef;
+	}
+	HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void** ppvObject) override {
+		if (riid == IID_IUnknown || riid == __uuidof(IActivateAudioInterfaceCompletionHandler)) {
+			*ppvObject = this;
+			AddRef();
+			return S_OK;
+		}
+		*ppvObject = nullptr;
+		return E_NOINTERFACE;
+	}
+
+	// IActivateAudioInterfaceCompletionHandler
+	STDMETHOD(ActivateCompleted)(IActivateAudioInterfaceAsyncOperation* operation) override {
+		if (operation) {
+			IUnknown* pUnknown = nullptr;
+			HRESULT hr_activate_result = E_FAIL;
+			operation->GetActivateResult(&hr_activate_result, &pUnknown);
+			activate_hr = hr_activate_result;
+			if (SUCCEEDED(activate_hr) && pUnknown) {
+				pUnknown->QueryInterface(IID_PPV_ARGS(&client));
+				pUnknown->Release();
+			}
+		}
+		SetEvent(event_finished);
+		return S_OK;
+	}
+
+	HRESULT activate_hr;
+	IAudioClient* client;
+	HANDLE event_finished;
+private:
+	LONG _refCount;
+};
+
+
+class AppLoopbackCapture {
+private:
+	std::thread m_thread;
+	std::atomic<bool> m_shutdown_flag{ false };
+	HANDLE m_shutdown_event = nullptr;
+	HANDLE m_packet_ready_event = nullptr;
+	DWORD m_pid;
+	RecordingSource* m_target_queue;
+	WAVEFORMATEX m_format;
+	IAudioClient* m_client = nullptr;
+	IAudioCaptureClient* m_capture_client = nullptr;
+
+public:
+	AppLoopbackCapture(DWORD pid, RecordingSource* target_queue, ma_uint32 sampleRate, ma_uint32 numChannels)
+		: m_pid(pid), m_target_queue(target_queue) {
+		m_format.wFormatTag = WAVE_FORMAT_IEEE_FLOAT;
+		m_format.nChannels = numChannels;
+		m_format.nSamplesPerSec = sampleRate;
+		m_format.wBitsPerSample = sizeof(float) * 8;
+		m_format.nBlockAlign = m_format.nChannels * sizeof(float);
+		m_format.nAvgBytesPerSec = m_format.nSamplesPerSec * m_format.nBlockAlign;
+		m_format.cbSize = 0;
+
+		m_shutdown_event = CreateEvent(nullptr, FALSE, FALSE, nullptr);
+		m_packet_ready_event = CreateEvent(nullptr, FALSE, FALSE, nullptr);
+	}
+
+	~AppLoopbackCapture() {
+		Stop();
+		if (m_shutdown_event) CloseHandle(m_shutdown_event);
+		if (m_packet_ready_event) CloseHandle(m_packet_ready_event);
+	}
+
+	void Start() {
+		m_shutdown_flag = false;
+		m_thread = std::thread(&AppLoopbackCapture::CaptureThread, this);
+	}
+
+	void Stop() {
+		if (m_shutdown_flag.exchange(true)) return; // Already stopping
+
+		if (m_shutdown_event) SetEvent(m_shutdown_event);
+		if (m_thread.joinable()) m_thread.join();
+	}
+
+private:
+	void CaptureThread() {
+		CoInitializeEx(NULL, COINIT_MULTITHREADED);
+
+		if (!InitClient()) {
+			CoUninitialize();
+			return;
+		}
+
+		m_client->Start();
+		HANDLE wait_handles[] = { m_shutdown_event, m_packet_ready_event };
+
+		while (!m_shutdown_flag) {
+			DWORD wait_result = WaitForMultipleObjects(2, wait_handles, FALSE, INFINITE);
+
+			if (wait_result == WAIT_OBJECT_0) {
+				break;
+			}
+			else if (wait_result == WAIT_OBJECT_0 + 1) {
+				if (!m_shutdown_flag) {
+					ProcessPacket();
+				}
+			}
+			else {
+				break;
+			}
+		}
+
+		m_client->Stop();
+		if (m_capture_client) m_capture_client->Release();
+		if (m_client) m_client->Release();
+		m_capture_client = nullptr;
+		m_client = nullptr;
+		CoUninitialize();
+	}
+
+	bool InitClient() {
+		HRESULT hr;
+
+		AUDIOCLIENT_ACTIVATION_PARAMS activationParams = {};
+		activationParams.ActivationType = AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK;
+		activationParams.ProcessLoopbackParams.TargetProcessId = m_pid;
+		activationParams.ProcessLoopbackParams.ProcessLoopbackMode = PROCESS_LOOPBACK_MODE_INCLUDE_TARGET_PROCESS_TREE;
+
+		PROPVARIANT propVariant = {};
+		propVariant.vt = VT_BLOB;
+		propVariant.blob.cbSize = sizeof(activationParams);
+		propVariant.blob.pBlobData = (BYTE*)&activationParams;
+
+		CompletionHandler* handler = new CompletionHandler();
+		IActivateAudioInterfaceAsyncOperation* async_op = nullptr;
+
+		hr = ActivateAudioInterfaceAsync(VIRTUAL_AUDIO_DEVICE_PROCESS_LOOPBACK, __uuidof(IAudioClient), &propVariant, handler, &async_op);
+		if (FAILED(hr)) {
+			handler->Release();
+			if (async_op) async_op->Release();
+			return false;
+		}
+		if (async_op) async_op->Release();
+
+		WaitForSingleObject(handler->event_finished, INFINITE);
+		hr = handler->activate_hr;
+		if (FAILED(hr)) {
+			handler->Release();
+			return false;
+		}
+
+		m_client = handler->client;
+		handler->client = nullptr;
+		handler->Release();
+
+		hr = m_client->Initialize(AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_LOOPBACK | AUDCLNT_STREAMFLAGS_EVENTCALLBACK, 100 * 10000, 0, &m_format, NULL);
+		if (FAILED(hr)) {
+			m_client->Release();
+			m_client = nullptr;
+			return false;
+		}
+
+		hr = m_client->SetEventHandle(m_packet_ready_event);
+		if (FAILED(hr)) { return false; }
+
+		hr = m_client->GetService(__uuidof(IAudioCaptureClient), (void**)&m_capture_client);
+		if (FAILED(hr)) { return false; }
+
+		return true;
+	}
+
+	void ProcessPacket() {
+		UINT32 num_frames = 0;
+		HRESULT hr = m_capture_client->GetNextPacketSize(&num_frames);
+		if (FAILED(hr)) return;
+
+		while (num_frames > 0) {
+			BYTE* pData;
+			DWORD flags;
+			UINT64 qpc_position;
+
+			hr = m_capture_client->GetBuffer(&pData, &num_frames, &flags, NULL, &qpc_position);
+			if (FAILED(hr)) break;
+
+			if (!(flags & AUDCLNT_BUFFERFLAGS_SILENT) && num_frames > 0) {
+				float* buffer = new float[num_frames * m_format.nChannels];
+				memcpy(buffer, pData, num_frames * m_format.nChannels * sizeof(float));
+
+				AudioData data;
+				data.buffer = buffer;
+				data.frameCount = num_frames;
+
+				{
+					std::lock_guard<std::mutex> lock(m_target_queue->mutex);
+					m_target_queue->queue.push_back(data);
+				}
+				m_target_queue->condition.notify_one();
+			}
+
+			m_capture_client->ReleaseBuffer(num_frames);
+			hr = m_capture_client->GetNextPacketSize(&num_frames);
+			if (FAILED(hr)) break;
+		}
+	}
+};
+
+
 class MINIAUDIO_IMPLEMENTATION CAudioRecorder {
 	std::thread m_ProcessingThread;
 	std::vector<std::unique_ptr<ma_device>> m_devices;
 	std::vector<std::unique_ptr<ma_encoder>> m_encoders;
 	std::unique_ptr<ma_data_converter> m_Converter;
+	std::vector<std::unique_ptr<AppLoopbackCapture>> m_app_capturers;
 
 public:
 	std::string base_filename;
@@ -1065,6 +1334,7 @@ public:
 		stop();
 		g_RecordingSources.clear();
 		g_CallbackUserData.clear();
+		m_app_capturers.clear();
 
 		if (sources.empty()) {
 			g_SpeechProvider.Speak("No devices configured for recording.", true);
@@ -1100,25 +1370,43 @@ public:
 
 		m_devices.resize(sources.size());
 		for (size_t i = 0; i < sources.size(); ++i) {
-			g_CallbackUserData.push_back(std::make_unique<CallbackUserData>(CallbackUserData{ i }));
+			const auto& source = sources[i];
 
-			ma_device_config deviceConfig = ma_device_config_init(sources[i].type);
-			deviceConfig.capture.pDeviceID = (ma_device_id*)&sources[i].device.id;
-			deviceConfig.capture.format = ma_format_f32;
-			deviceConfig.capture.channels = channels;
-			deviceConfig.sampleRate = sample_rate;
-			deviceConfig.dataCallback = CAudioRecorder::GeneralDataCallback;
-			deviceConfig.pUserData = g_CallbackUserData.back().get();
+			switch (source.type) {
+			case APP_LOOPBACK: {
+				auto capturer = std::make_unique<AppLoopbackCapture>(source.app.id, g_RecordingSources[i].get(), sample_rate, channels);
+				capturer->Start();
+				m_app_capturers.push_back(std::move(capturer));
+				break;
+			}
+			case DEVICE_CAPTURE:
+			case DEVICE_LOOPBACK: {
+				g_CallbackUserData.push_back(std::make_unique<CallbackUserData>(CallbackUserData{ i }));
 
-			m_devices[i] = std::make_unique<ma_device>();
-			CheckIfError(ma_device_init(CSingleton<CAudioContext>::GetInstance(), &deviceConfig, &*m_devices[i]));
+				ma_device_config deviceConfig = ma_device_config_init(source.type == DEVICE_CAPTURE ? ma_device_type_capture : ma_device_type_loopback);
+				deviceConfig.capture.pDeviceID = (ma_device_id*)&source.device.id;
+				deviceConfig.capture.format = ma_format_f32;
+				deviceConfig.capture.channels = channels;
+				deviceConfig.sampleRate = sample_rate;
+				deviceConfig.dataCallback = CAudioRecorder::GeneralDataCallback;
+				deviceConfig.pUserData = g_CallbackUserData.back().get();
+
+				m_devices[i] = std::make_unique<ma_device>();
+				CheckIfError(ma_device_init(CSingleton<CAudioContext>::GetInstance(), &deviceConfig, &*m_devices[i]));
+				break;
+			}
+			}
 		}
+
 
 		ma_data_converter_config cfg = ma_data_converter_config_init(ma_format_f32, buffer_format, channels, channels, sample_rate, sample_rate);
 		m_Converter = std::make_unique<ma_data_converter>();
 		CheckIfError(ma_data_converter_init(&cfg, nullptr, &*m_Converter));
+
 		for (auto& device : m_devices) {
-			CheckIfError(ma_device_start(&*device));
+			if (device) {
+				CheckIfError(ma_device_start(&*device));
+			}
 		}
 		thread_shutdown.store(false);
 		m_ProcessingThread = std::thread(CAudioRecorder::ProcessingThread, this);
@@ -1128,6 +1416,10 @@ public:
 	void stop() {
 		if (!g_Recording && m_devices.empty()) return;
 		g_Recording = false;
+		for (auto& capturer : m_app_capturers) {
+			if (capturer) capturer->Stop();
+		}
+		m_app_capturers.clear();
 
 		if (m_Converter) {
 			ma_data_converter_uninit(&*m_Converter, nullptr);
@@ -1353,14 +1645,17 @@ public:
 		if (!sources_list) return;
 		clear_list(sources_list);
 		for (const auto& source : g_ConfiguredSources) {
-			std::wstring type_str = (source.type == ma_device_type_capture) ? L"[Mic]" : L"[Loopback]";
-			std::wstring display_text = source.custom_name + type_str;
+			std::wstring type_str;
+			switch (source.type) {
+			case DEVICE_CAPTURE: type_str = L"[Mic]"; break;
+			case DEVICE_LOOPBACK: type_str = L"[Loopback]"; break;
+			case APP_LOOPBACK: type_str = L"[App]"; break;
+			}
+			std::wstring display_text = source.custom_name + L" " + type_str;
 			add_list_item(sources_list, display_text.c_str());
 		}
 	}
 };
-
-
 
 
 class CRecordManagerWindow final : public virtual IWindow {
@@ -1714,11 +2009,18 @@ public:
 	HWND lblDevice, listDevices;
 	HWND btnOK, btnCancel;
 
-	std::vector<std::pair<audio_device, ma_device_type>> available_devices;
+	struct DiscoverableSource {
+		std::wstring display_name;
+		SourceType type;
+		audio_device device;
+		application app;
+	};
+	std::vector<DiscoverableSource> available_sources;
+
 
 	void build() override {
 		this->reset();
-		available_devices.clear();
+		available_sources.clear();
 
 		int x_label = 10, x_control = 120;
 		int y_pos = 10;
@@ -1726,36 +2028,48 @@ public:
 		int y_spacing = 10;
 
 		lblName = create_text(window, L"Source Name:", x_label, y_pos, label_width, ctrl_height, 0); push(lblName);
-		push(lblName);
 		editName = create_input_box(window, false, false, x_control, y_pos, control_width, ctrl_height, 0); push(editName);
-		push(editName);
 		y_pos += ctrl_height + y_spacing;
 
-		lblDevice = create_text(window, L"Audio Device:", x_label, y_pos, label_width, ctrl_height, 0); push(lblDevice);
-		push(lblDevice);
+		lblDevice = create_text(window, L"Audio Source:", x_label, y_pos, label_width, ctrl_height, 0); push(lblDevice);
 		listDevices = create_list(window, x_control, y_pos, control_width, list_height, 0);
 		push(listDevices);
 		y_pos += list_height + y_spacing * 2;
 
 		btnOK = create_button(window, L"OK", x_control, y_pos, 80, 30, 0); push(btnOK);
-		push(btnOK);
 		btnCancel = create_button(window, L"Cancel", x_control + 90, y_pos, 80, 30, 0); push(btnCancel);
-		push(btnCancel);
 
 		g_InAudioDevices = get_input_audio_devices();
 		for (const auto& dev : g_InAudioDevices) {
 			if (dev.name == L"Default" || dev.name == L"Not used") continue;
-			add_list_item(listDevices, dev.name.c_str());
-			available_devices.push_back({ dev, ma_device_type_capture });
+			DiscoverableSource src;
+			src.display_name = dev.name + L" [Mic]";
+			src.type = DEVICE_CAPTURE;
+			src.device = dev;
+			available_sources.push_back(src);
+			add_list_item(listDevices, src.display_name.c_str());
 		}
-
-		size_t separator2_idx = g_InAudioDevices.size() - 1;
 
 		g_OutAudioDevices = get_output_audio_devices();
 		for (const auto& dev : g_OutAudioDevices) {
 			if (dev.name == L"Not used") continue;
-			add_list_item(listDevices, dev.name.c_str());
-			available_devices.push_back({ dev, ma_device_type_loopback });
+			DiscoverableSource src;
+			src.display_name = dev.name + L" [Loopback]";
+			src.type = DEVICE_LOOPBACK;
+			src.device = dev;
+			available_sources.push_back(src);
+			add_list_item(listDevices, src.display_name.c_str());
+		}
+
+		auto apps = get_tasklist();
+		for (const auto& app : apps) {
+			if (app.id == 0) continue;
+			DiscoverableSource src;
+			src.display_name = app.name + L" (PID: " + std::to_wstring(app.id) + L") [App]";
+			src.type = APP_LOOPBACK;
+			src.app = app;
+			available_sources.push_back(src);
+			add_list_item(listDevices, src.display_name.c_str());
 		}
 
 
@@ -2135,35 +2449,30 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, wchar_t* lpCmd
 				else if (is_pressed(g_AddSourceWindow.btnOK)) {
 					std::wstring name = get_text(g_AddSourceWindow.editName);
 					int selection_idx = get_list_position(g_AddSourceWindow.listDevices);
-					std::wstring selected_device_name = get_list_item_text_by_index_internal(g_AddSourceWindow.listDevices, selection_idx);
 
 					if (name.empty()) {
 						alert(L"Input Error", L"Please provide a name for the source.", MB_ICONWARNING);
 						focus(g_AddSourceWindow.editName);
 					}
-					else if (selection_idx < 0 || selected_device_name.find(L"---") != std::wstring::npos) {
-						alert(L"Input Error", L"Please select a valid audio device.", MB_ICONWARNING);
+					else if (selection_idx < 0) {
+						alert(L"Input Error", L"Please select a valid audio source.", MB_ICONWARNING);
 						focus(g_AddSourceWindow.listDevices);
 					}
 					else {
-						bool found = false;
-						for (const auto& available_dev : g_AddSourceWindow.available_devices) {
-							if (available_dev.first.name == selected_device_name) {
-								g_ConfiguredSources.push_back({ name, available_dev.first, available_dev.second });
-								found = true;
-								break;
-							}
-						}
+						const auto& selected_source = g_AddSourceWindow.available_sources[selection_idx];
+						ConfiguredSource new_source;
+						new_source.custom_name = name;
+						new_source.type = selected_source.type;
+						new_source.device = selected_source.device;
+						new_source.app.id = selected_source.app.id;
+						new_source.app.name = selected_source.app.name;
 
-						if (found) {
-							g_MainWindow.update_sources_list();
-							g_AddSourceWindow.reset();
-							focus(g_MainWindow.add_source_btn);
-							g_AddingSourceMode = false;
-						}
-						else {
-							alert(L"Internal Error", L"Could not find the selected device data.", MB_ICONERROR);
-						}
+						g_ConfiguredSources.push_back(new_source);
+
+						g_MainWindow.update_sources_list();
+						g_AddSourceWindow.reset();
+						focus(g_MainWindow.add_source_btn);
+						g_AddingSourceMode = false;
 					}
 				}
 			}
