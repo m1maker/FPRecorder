@@ -11,7 +11,6 @@
 #include <shlobj_core.h>
 #include <stacktrace>
 #include <tlhelp32.h>
-#include <Uiautomationcore.h>
 #define MINIAUDIO_IMPLEMENTATION
 #include "miniaudio.h"
 #include <comdef.h>
@@ -342,85 +341,6 @@ public:
 
 
 
-class CUIAutomationSpeech {
-	IUIAutomation* pAutomation = nullptr;
-	IUIAutomationCondition* pCondition = nullptr;
-	VARIANT varName;
-	Provider* pProvider = nullptr;
-	IUIAutomationElement* pElement = nullptr;
-public:
-	CUIAutomationSpeech() {
-		HRESULT hr = CoInitialize(NULL);
-		hr = CoCreateInstance(CLSID_CUIAutomation, NULL, CLSCTX_INPROC_SERVER, IID_IUIAutomation, (void**)&pAutomation);
-		if (FAILED(hr)) {
-			return;
-		}
-
-		varName.vt = VT_BSTR;
-		varName.bstrVal = _bstr_t(L"");
-		auto result = safeCallVal<IUIAutomation, HRESULT>(pAutomation, &IUIAutomation::CreatePropertyConditionEx, UIA_NamePropertyId, varName, PropertyConditionFlags_None, &pCondition);
-		if (!result.has_value() || FAILED(*result)) {
-			return;
-		}
-	}
-	~CUIAutomationSpeech() {
-		safeCall(pProvider, &Provider::Release);
-		safeCall(pCondition, &IUIAutomationCondition::Release);
-		safeCall(pAutomation, &IUIAutomation::Release);
-		safeCall(pElement, &IUIAutomationElement::Release);
-	}
-
-	bool Speak(const wchar_t* text, bool interrupt = true) {
-		safeCall(pProvider, &Provider::Release);
-		safeCall(pElement, &IUIAutomationElement::Release);
-		pProvider = new Provider(GetForegroundWindow());
-
-		auto result = safeCallVal<IUIAutomation, HRESULT>(pAutomation, &IUIAutomation::ElementFromHandle, GetForegroundWindow(), &pElement);
-		if (!result.has_value() || FAILED(*result)) {
-			return false;
-		}
-		HRESULT hr = UiaRaiseNotificationEvent(pProvider, NotificationKind_ActionCompleted, interrupt ? NotificationProcessing_ImportantMostRecent : NotificationProcessing_ImportantAll, _bstr_t(text), _bstr_t(L""));
-		if (FAILED(hr)) {
-			return false;
-		}
-		return true;
-
-	}
-	inline bool Speak(const char* text, bool interrupt = true) {
-		std::wstring str;
-		CStringUtils::UnicodeConvert(text, str);
-		return this->Speak(str.c_str(), interrupt);
-	}
-	inline bool Speak(const std::string& utf8str, bool interrupt = true) {
-		return this->Speak(utf8str.c_str(), interrupt);
-	}
-	inline bool Speak(const std::wstring& utf16str, bool interrupt = true) {
-		return this->Speak(utf16str.c_str(), interrupt);
-	}
-
-	template <typename... Args>
-	bool Speakf(const char* format, Args... args) {
-		const size_t bufferSize = 1024;
-		char buffer[bufferSize];
-
-
-		int ret = vsnprintf(buffer, bufferSize, format, args...);
-
-		if (ret < 0 || ret >= bufferSize) {
-			return false;
-		}
-
-		return Speak(buffer);
-	}
-
-
-	bool StopSpeech() {
-		return Speak(L"", true);
-	}
-};
-
-
-#define g_SpeechProvider CSingleton<CUIAutomationSpeech>::GetInstance()
 
 static int ExecSystemCmd(const std::string& str, std::string& out)
 {
@@ -1343,7 +1263,6 @@ public:
 		m_app_capturers.clear();
 
 		if (sources.empty()) {
-			g_SpeechProvider.Speak("No devices configured for recording.", true);
 			return;
 		}
 
@@ -1352,6 +1271,7 @@ public:
 			g_RecordingSources.back()->name = source.custom_name;
 		}
 
+		std::filesystem::create_directory(record_path);
 		base_filename = g_CommandLineOptions.useFilename ? (std::filesystem::path(record_path / g_CommandLineOptions.filename).generic_string()) : (record_path / get_now()).generic_string();
 		ma_encoder_config encoderConfig = ma_encoder_config_init(ma_encoding_format_wav, buffer_format, channels, sample_rate);
 
@@ -1675,7 +1595,6 @@ public:
 	HWND close_button = nullptr;
 
 	void build()override {
-		g_SpeechProvider.Speak(record_path.c_str(), false);
 		wait(50);
 		items_view_text = create_text(window, L"Items view", 10, 10, 0, 10, 0);
 		push(items_view_text);
@@ -2099,7 +2018,7 @@ bool g_RecordingsManager = false;
 
 int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, wchar_t* lpCmdLine, ma_int32       nShowCmd) {
 	std::vector<std::string> options, values;
-	if (g_CommandLineOptions.ParseOptions(lpCmdLine, options, values)) {
+	if (COptionSet::ParseOptions(lpCmdLine, options, values)) {
 		for (size_t i = 0; i < options.size(); ++i) {
 			if (options[i] == "-start") {
 				g_CommandLineOptions.start = true;
@@ -2294,8 +2213,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, wchar_t* lpCmd
 			if (gui::try_close) {
 				gui::try_close = false;
 				if (g_Recording) {
-					if (sound_events)g_SoundStream.PlayEvent(CSoundStream::SOUND_EVENT_ERROR);
-					g_SpeechProvider.Speak("Unable to exit, while recording.");
+					alert(L"FPError", L"Can't close the application now. To hide the window, use the Hide/Show hotkey.", MB_ICONWARNING);
 					continue;
 				}
 				g_Retcode = 0;
@@ -2306,7 +2224,6 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, wchar_t* lpCmd
 				g_MainWindow.reset();
 				g_SettingsWindow.build();
 				g_SettingsMode = true;
-				g_SpeechProvider.Speak("Settings", false);
 				key_released(VK_RETURN);
 			}
 
@@ -2316,7 +2233,6 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, wchar_t* lpCmd
 					g_MainWindow.build();
 					focus(g_MainWindow.settings_button);
 					g_SettingsMode = false;
-					g_SpeechProvider.Speak("Canceled.", false);
 				}
 				else if (is_pressed(g_SettingsWindow.btnSaveSettings) || key_pressed(VK_RETURN)) {
 					if (g_SettingsWindow.validate_and_prepare_settings()) {
@@ -2326,7 +2242,6 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, wchar_t* lpCmd
 						g_MainWindow.build();
 						focus(g_MainWindow.settings_button);
 						g_SettingsMode = false;
-						g_SpeechProvider.Speak("Settings saved.", false);
 					}
 				}
 				else if (is_pressed(g_SettingsWindow.btnBrowseRecordPath)) {
@@ -2372,7 +2287,6 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, wchar_t* lpCmd
 			if (g_RecordingsManager) {
 				if (key_down(VK_ESCAPE) or is_pressed(g_RecordManagerWindow.close_button)) {
 					g_SoundStream.Close();
-					g_SpeechProvider.Speak("Closed.");
 					g_RecordManagerWindow.reset();
 					g_MainWindow.build();
 					focus(g_MainWindow.record_manager);
@@ -2381,13 +2295,12 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, wchar_t* lpCmd
 				std::vector<wstring> files = get_files(record_path.generic_wstring());
 				if (files.size() == 0) {
 					if (sound_events)		g_SoundStream.PlayEvent(CSoundStream::SOUND_EVENT_ERROR);
-					g_SpeechProvider.Speak("There are no files in \"" + record_path.generic_string() + "\".");
 					g_RecordManagerWindow.reset();
 					g_MainWindow.build();
 					focus(g_MainWindow.record_manager);
 					g_RecordingsManager = false;
 				}
-				if ((key_pressed(VK_SPACE) && get_current_focus() == g_RecordManagerWindow.items_view_list) || is_pressed(g_RecordManagerWindow.play_button)) {
+				if (((key_pressed(VK_SPACE) || key_pressed(VK_RETURN)) && get_current_focus() == g_RecordManagerWindow.items_view_list) || is_pressed(g_RecordManagerWindow.play_button)) {
 					std::filesystem::path file = record_path / get_focused_list_item_name(g_RecordManagerWindow.items_view_list);
 					g_SoundStream.Play(file.generic_string());
 					if (get_current_focus() == g_RecordManagerWindow.play_button)focus(g_RecordManagerWindow.pause_button);
@@ -2419,6 +2332,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, wchar_t* lpCmd
 
 			if (!g_Recording && !g_RecordingsManager && !g_SettingsMode && !g_AddingSourceMode) {
 				if (is_pressed(g_MainWindow.add_source_btn)) {
+					g_MainWindow.reset();
 					g_AddSourceWindow.build();
 					g_AddingSourceMode = true;
 				}
@@ -2441,7 +2355,8 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, wchar_t* lpCmd
 						g_RecordingPaused = false;
 					}
 					else {
-						g_SpeechProvider.Speak("Please add at least one audio source before recording.", true);
+						if (sound_events)		g_SoundStream.PlayEvent(CSoundStream::SOUND_EVENT_ERROR);
+						alert(L"FPError", L"No sources yet. Please add a new source by pressing 'Add Source...' button.", MB_ICONWARNING);
 					}
 				}
 			}
@@ -2449,6 +2364,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, wchar_t* lpCmd
 			if (g_AddingSourceMode) {
 				if (is_pressed(g_AddSourceWindow.btnCancel) || key_down(VK_ESCAPE)) {
 					g_AddSourceWindow.reset();
+					g_MainWindow.build();
 					focus(g_MainWindow.add_source_btn);
 					g_AddingSourceMode = false;
 				}
@@ -2477,6 +2393,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, wchar_t* lpCmd
 
 						g_MainWindow.update_sources_list();
 						g_AddSourceWindow.reset();
+						g_MainWindow.build();
 						focus(g_MainWindow.add_source_btn);
 						g_AddingSourceMode = false;
 					}
@@ -2497,7 +2414,6 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, wchar_t* lpCmd
 				else if (audio_format != CStringUtils::ToLowerCase("wav")) {
 					string output;
 					std::vector<std::string> split = CStringUtils::Split(".wav", g_AudioRecorder.base_filename);
-					g_SpeechProvider.Speak("Converting...");
 					std::string cmd = g_CurrentPreset.command;
 					CStringUtils::Replace(cmd, "%I", "\"" + g_AudioRecorder.base_filename + ".wav\"", true);
 					CStringUtils::Replace(cmd, "%i", "\"" + split[0] + "\"", true);
